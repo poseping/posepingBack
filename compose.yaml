@@ -1,0 +1,9 @@
+services:
+  api:
+    build: .
+    container_name: poseping-api
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"

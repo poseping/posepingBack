@@ -1,0 +1,17 @@
+# requirements.txt (runtime)
+fastapi==0.135.2
+uvicorn[standard]==0.43.0
+sqlalchemy==2.0.49
+alembic==1.16.5
+psycopg[binary]==3.3.3
+pydantic==2.12.5
+pydantic-settings==2.13.1
+mediapipe==0.10.33
+numpy==1.26.4
+anthropic==0.84.0
+python-multipart==0.0.22
+
+
+# requirements-dev.txt (dev/test only)
+pytest==9.0.2
+
