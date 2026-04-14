@@ -7,6 +7,7 @@ from alembic import context
 
 from app.models import Member
 from app.core.config import settings
+from app.db.session import Base
 
 
 # this is the Alembic Config object, which provides
@@ -24,7 +25,7 @@ config.set_main_option("sqlalchemy.url", settings.database_url_direct)
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
-target_metadata = None
+target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
