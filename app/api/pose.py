@@ -4,14 +4,62 @@
 웹캠 자세 감지 및 분석 관련 API
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends, Header
 from pydantic import BaseModel
-from typing import Any, List, Optional
+from typing import List, Optional
+import cv2
 import base64
 import numpy as np
+from io import BytesIO
+from sqlalchemy.orm import Session
+
+from app.services.mediapipe_detector import MediaPipePoseDetector, PoseDetectionResult
+from app.services.pose_analyzer import PoseAnalyzer, PostureAnalysisResult
+from app.services.auth_service import JWTService
+from app.db.session import get_db
+from app.models.models import Member
 
 
 router = APIRouter()
+
+
+# ==================== 인증 의존성 ====================
+
+async def verify_auth(
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+) -> Member:
+    """
+    Authorization 헤더에서 JWT 토큰을 검증하고 회원 정보 반환
+
+    Args:
+        authorization: Authorization 헤더 (형식: "Bearer {token}")
+        db: DB 세션
+
+    Returns:
+        Member: 검증된 회원 정보
+
+    Raises:
+        HTTPException: 인증 실패 시
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization 헤더가 필요합니다")
+
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(status_code=401, detail="유효하지 않은 Authorization 헤더")
+
+    token = parts[1]
+    member_id = JWTService.verify_token(token)
+
+    if not member_id:
+        raise HTTPException(status_code=401, detail="유효하지 않은 토큰")
+
+    member = db.query(Member).filter(Member.member_id == member_id).first()
+    if not member or member.status == "WITHDRAWN":
+        raise HTTPException(status_code=401, detail="사용자를 찾을 수 없음")
+
+    return member
 
 
 class LandmarkResponse(BaseModel):
@@ -46,40 +94,32 @@ class PoseDetectionRequest(BaseModel):
 # 전역 변수 (간단한 구현용)
 detector = None
 analyzer = None
-cv2: Any = None
 
 
 def init_services():
     """서비스 초기화"""
-    global detector, analyzer, cv2
-    if cv2 is None:
-        import cv2 as cv2_module
-
-        cv2 = cv2_module
+    global detector, analyzer
     if detector is None:
-        from app.services.mediapipe_detector import MediaPipePoseDetector
-
         detector = MediaPipePoseDetector()
     if analyzer is None:
-        from app.services.pose_analyzer import PoseAnalyzer
-
         analyzer = PoseAnalyzer()
 
 
 @router.post("/analyze")
-async def analyze_posture(request: PoseDetectionRequest):
+async def analyze_posture(request: PoseDetectionRequest, member: Member = Depends(verify_auth)):
     """
-    웹캠 프레임에서 자세를 분석합니다.
+    웹캠 프레임에서 자세를 분석합니다. (인증 필요)
 
     Args:
         request: Base64 인코딩된 이미지
+        member: 인증된 회원 정보 (Authorization 헤더에서 자동 검증)
 
     Returns:
         PostureAnalysisResponse: 자세 분석 결과
     """
-    try:
-        init_services()
+    init_services()
 
+    try:
         if not request.image_base64:
             raise HTTPException(status_code=400, detail="image_base64가 필요합니다")
 
@@ -137,26 +177,25 @@ async def analyze_posture(request: PoseDetectionRequest):
             recommendations=analysis.recommendations
         )
 
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/landmarks")
-async def get_landmarks(image_base64: Optional[str] = None):
+async def get_landmarks(image_base64: Optional[str] = None, member: Member = Depends(verify_auth)):
     """
-    포즈 랜드마크를 반환합니다.
+    포즈 랜드마크를 반환합니다. (인증 필요)
 
     Args:
         image_base64: Base64 인코딩된 이미지
+        member: 인증된 회원 정보 (Authorization 헤더에서 자동 검증)
 
     Returns:
         dict: 랜드마크 데이터
     """
-    try:
-        init_services()
+    init_services()
 
+    try:
         if not image_base64:
             raise HTTPException(status_code=400, detail="image_base64가 필요합니다")
 
@@ -173,8 +212,6 @@ async def get_landmarks(image_base64: Optional[str] = None):
 
         return detector.to_dict(pose_result)
 
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
