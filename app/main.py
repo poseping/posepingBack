@@ -6,7 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.db.session import get_engine
-from app.api import pose, auth
+from app.api import auth, photo_pose, pose
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -27,6 +27,7 @@ app.add_middleware(
 # 라우터 등록
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(pose.router, prefix="/api/pose", tags=["pose"])
+app.include_router(photo_pose.router, prefix="/api/photo", tags=["photo"])
 
 
 @app.on_event("startup")

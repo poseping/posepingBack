@@ -7,7 +7,7 @@ MediaPipe Pose Detection Service (새로운 Task API)
 import cv2
 import numpy as np
 import os
-from typing import Optional, Dict, List
+from typing import Dict, List, Literal, Optional
 from dataclasses import dataclass
 from datetime import datetime
 import json
@@ -68,7 +68,8 @@ class MediaPipePoseDetector:
 
     def __init__(self, min_pose_detection_confidence: float = 0.5,
                  min_pose_presence_confidence: float = 0.5,
-                 min_tracking_confidence: float = 0.5):
+                 min_tracking_confidence: float = 0.5,
+                 running_mode: Literal["image", "video"] = "video"):
         """
         MediaPipePoseDetector 초기화 (Task API 사용)
 
@@ -76,24 +77,34 @@ class MediaPipePoseDetector:
             min_pose_detection_confidence: 최소 감지 신뢰도
             min_pose_presence_confidence: 최소 포즈 존재 신뢰도
             min_tracking_confidence: 최소 추적 신뢰도
+            running_mode: 단일 이미지 분석은 image, 연속 프레임 분석은 video
         """
         BaseOptions = mp.tasks.BaseOptions
         PoseLandmarker = vision.PoseLandmarker
         PoseLandmarkerOptions = vision.PoseLandmarkerOptions
         VisionRunningMode = vision.RunningMode
         model_asset_path = self._resolve_model_asset_path()
+        self.running_mode = running_mode.lower()
+
+        if self.running_mode == "video":
+            mediapipe_running_mode = VisionRunningMode.VIDEO
+            self.timestamp_ms = 0
+        elif self.running_mode == "image":
+            mediapipe_running_mode = VisionRunningMode.IMAGE
+            self.timestamp_ms = None
+        else:
+            raise ValueError(f"Unsupported running_mode: {running_mode}")
 
         # ⭐ 모델 파일 경로 지정
         options = PoseLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=str(model_asset_path)),
-            running_mode=VisionRunningMode.VIDEO,
+            running_mode=mediapipe_running_mode,
             min_pose_detection_confidence=min_pose_detection_confidence,
             min_pose_presence_confidence=min_pose_presence_confidence,
             min_tracking_confidence=min_tracking_confidence
         )
 
         self.detector = PoseLandmarker.create_from_options(options)
-        self.timestamp_ms = 0
 
     @classmethod
     def ensure_model_asset(cls) -> Path:
@@ -155,8 +166,11 @@ class MediaPipePoseDetector:
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
         # 포즈 감지
-        self.timestamp_ms += 33  # ~30fps
-        detection_result = self.detector.detect_for_video(mp_image, self.timestamp_ms)
+        if self.running_mode == "video":
+            self.timestamp_ms += 33
+            detection_result = self.detector.detect_for_video(mp_image, self.timestamp_ms)
+        else:
+            detection_result = self.detector.detect(mp_image)
 
         landmarks_list = []
         confidence = 0.0
