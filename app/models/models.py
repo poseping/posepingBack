@@ -1,6 +1,18 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -43,3 +55,57 @@ class Member(Base):
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class PoseAnalysis(Base):
+    __tablename__ = "pose_analyses"
+
+    __table_args__ = (
+        CheckConstraint(
+            "side_view IN ('left', 'right')",
+            name="chk_pose_analyses_side_view",
+        ),
+        CheckConstraint(
+            "overall_status IN ('good', 'warning', 'bad')",
+            name="chk_pose_analyses_status",
+        ),
+    )
+
+    analysis_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    member_id: Mapped[int] = mapped_column(
+        ForeignKey("members.member_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    side_view: Mapped[str] = mapped_column(String(10), nullable=False)
+    overall_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    overall_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    front_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    side_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    neck_forward_angle: Mapped[float] = mapped_column(Float, nullable=False)
+    shoulder_slope: Mapped[float] = mapped_column(Float, nullable=False)
+    hip_slope: Mapped[float | None] = mapped_column(Float, nullable=True)
+    spine_alignment: Mapped[float | None] = mapped_column(Float, nullable=True)
+    asymmetry_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    forward_head_detected: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    analyzed_at: Mapped[datetime] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
+
+class UserPostureProfile(Base):
+    __tablename__ = "user_posture_profiles"
+
+    profile_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    member_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("members.member_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    profile_name: Mapped[str] = mapped_column(String(255), nullable=False, server_default="기본 자세")
+    monitor_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reference_landmarks: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
