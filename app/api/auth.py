@@ -225,6 +225,47 @@ async def verify_token(token: str, db: Session = Depends(get_db)):
     )
 
 
+# ==================== 개발용 로그인 ====================
+
+@router.post("/dev-login", response_model=LoginResponse)
+async def dev_login(db: Session = Depends(get_db)):
+    """
+    개발용 로그인 (DEBUG 환경에서만 동작)
+    소셜 로그인 없이 테스트용 JWT 토큰 발급
+    """
+    from app.core.config import settings
+    if settings.app_env != "dev":
+        raise HTTPException(status_code=404, detail="Not found")
+
+    member = db.query(Member).filter(
+        Member.provider == "KAKAO",
+        Member.provider_user_id == "dev-test-user",
+    ).first()
+
+    if not member:
+        member = Member(
+            provider="KAKAO",
+            provider_user_id="dev-test-user",
+            nickname="개발자",
+            status="ACTIVE",
+            role="USER",
+            last_login_at=datetime.now(timezone.utc),
+        )
+        db.add(member)
+        db.commit()
+        db.refresh(member)
+
+    access_token = JWTService.create_access_token(member.member_id)
+
+    return LoginResponse(
+        success=True,
+        access_token=access_token,
+        token_type="Bearer",
+        expires_in=3600,
+        user=UserResponse.from_orm(member),
+    )
+
+
 # ==================== 로그아웃 ====================
 
 @router.post("/logout")
