@@ -4,62 +4,22 @@
 웹캠 자세 감지 및 분석 관련 API
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 import cv2
 import base64
 import numpy as np
-from io import BytesIO
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import verify_auth
 from app.services.mediapipe_detector import MediaPipePoseDetector, PoseDetectionResult
 from app.services.pose_analyzer import PoseAnalyzer, PostureAnalysisResult
-from app.services.auth_service import JWTService
 from app.db.session import get_db
 from app.models.models import Member
 
 
 router = APIRouter()
-
-
-# ==================== 인증 의존성 ====================
-
-async def verify_auth(
-    authorization: Optional[str] = Header(None),
-    db: Session = Depends(get_db)
-) -> Member:
-    """
-    Authorization 헤더에서 JWT 토큰을 검증하고 회원 정보 반환
-
-    Args:
-        authorization: Authorization 헤더 (형식: "Bearer {token}")
-        db: DB 세션
-
-    Returns:
-        Member: 검증된 회원 정보
-
-    Raises:
-        HTTPException: 인증 실패 시
-    """
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization 헤더가 필요합니다")
-
-    parts = authorization.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(status_code=401, detail="유효하지 않은 Authorization 헤더")
-
-    token = parts[1]
-    member_id = JWTService.verify_token(token)
-
-    if not member_id:
-        raise HTTPException(status_code=401, detail="유효하지 않은 토큰")
-
-    member = db.query(Member).filter(Member.member_id == member_id).first()
-    if not member or member.status == "WITHDRAWN":
-        raise HTTPException(status_code=401, detail="사용자를 찾을 수 없음")
-
-    return member
 
 
 class LandmarkResponse(BaseModel):
