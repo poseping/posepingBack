@@ -6,13 +6,11 @@ from sqlalchemy import (
     CheckConstraint,
     Float,
     ForeignKey,
-    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
-    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -97,16 +95,7 @@ class PoseAnalysis(Base):
 class UserPostureProfile(Base):
     __tablename__ = "user_posture_profiles"
 
-    __table_args__ = (
-        Index(
-            "uq_one_primary_per_user",
-            "member_id",
-            unique=True,
-            postgresql_where=text("is_primary = TRUE"),
-        ),
-    )
-
-    profile_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     member_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("members.member_id", ondelete="CASCADE"),
@@ -117,6 +106,6 @@ class UserPostureProfile(Base):
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     reference_landmarks: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
