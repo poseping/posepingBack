@@ -83,8 +83,8 @@ class SaveAnalysisResponse(BaseModel):
 
 class ManualLandmarkInput(BaseModel):
     id: int = Field(..., ge=0, le=32)
-    x: float = Field(..., ge=0.0, le=1.0)
-    y: float = Field(..., ge=0.0, le=1.0)
+    x: float
+    y: float
     z: float = 0.0
     visibility: float = Field(default=1.0, ge=0.0, le=1.0)
     name: str | None = None
