@@ -92,6 +92,37 @@ class PoseAnalysis(Base):
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
 
 
+class WebcamAlertType(Base):
+    __tablename__ = "webcam_alert_type"
+
+    alert_type_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    alert_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class WebcamSession(Base):
+    __tablename__ = "webcam_sessions"
+
+    session_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    member_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("members.member_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    profile_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("user_posture_profiles.profile_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    started_at: Mapped[datetime] = mapped_column(nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    good_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    warning_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    bad_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    cause_counts: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
 class UserPostureProfile(Base):
     __tablename__ = "user_posture_profiles"
 
