@@ -6,11 +6,13 @@ from sqlalchemy import (
     CheckConstraint,
     Float,
     ForeignKey,
+    Integer,
     String,
     Text,
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -88,3 +90,22 @@ class PoseAnalysis(Base):
     forward_head_detected: Mapped[bool] = mapped_column(Boolean, nullable=False)
     analyzed_at: Mapped[datetime] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
+
+class UserPostureProfile(Base):
+    __tablename__ = "user_posture_profiles"
+
+    profile_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    member_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("members.member_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    profile_name: Mapped[str] = mapped_column(String(255), nullable=False, server_default="기본 자세")
+    monitor_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reference_landmarks: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
