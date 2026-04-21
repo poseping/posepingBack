@@ -52,6 +52,13 @@ class PostureProfileResponse(BaseModel):
         from_attributes = True
 
 
+class PostureProfileUpdateRequest(BaseModel):
+    profile_name: Optional[str] = None
+    monitor_label: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
 class WebcamAnalyzeRequest(BaseModel):
     image_base64: str
     profile_id: Optional[int] = None  # None이면 활성화된 기준 자세 중 첫 번째 사용
@@ -69,6 +76,9 @@ class WebcamAnalyzeResponse(BaseModel):
     profile_name: str
     issues: List[str]
     per_point: dict
+    landmarks: List[LandmarkData]
+    frame_width: int
+    frame_height: int
 
 
 _detector: Optional[MediaPipePoseDetector] = None
@@ -117,14 +127,67 @@ async def get_posture_profiles(
     """내 기준 자세 목록 조회 (활성화된 것만, 인증 필요)"""
     profiles = (
         db.query(UserPostureProfile)
-        .filter(
-            UserPostureProfile.member_id == member.member_id,
-            UserPostureProfile.is_active == True,
-        )
-        .order_by(UserPostureProfile.display_order, UserPostureProfile.created_at)
+        .filter(UserPostureProfile.member_id == member.member_id)
+        .order_by(UserPostureProfile.is_active.desc(), UserPostureProfile.display_order, UserPostureProfile.created_at)
         .all()
     )
     return profiles
+
+
+@router.patch("/posture-profile/{profile_id}", response_model=PostureProfileResponse)
+async def update_posture_profile(
+    profile_id: int,
+    request: PostureProfileUpdateRequest,
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+):
+    """기준 자세 수정 (인증 필요)"""
+    profile = (
+        db.query(UserPostureProfile)
+        .filter(
+            UserPostureProfile.profile_id == profile_id,
+            UserPostureProfile.member_id == member.member_id,
+        )
+        .first()
+    )
+    if not profile:
+        raise HTTPException(status_code=404, detail="기준 자세를 찾을 수 없습니다.")
+
+    if request.profile_name is not None:
+        profile.profile_name = request.profile_name
+    if request.monitor_label is not None:
+        profile.monitor_label = request.monitor_label
+    if request.description is not None:
+        profile.description = request.description
+    if request.is_active is not None:
+        profile.is_active = request.is_active
+
+    profile.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
+@router.delete("/posture-profile/{profile_id}", status_code=204)
+async def delete_posture_profile(
+    profile_id: int,
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+):
+    """기준 자세 삭제 (인증 필요)"""
+    profile = (
+        db.query(UserPostureProfile)
+        .filter(
+            UserPostureProfile.profile_id == profile_id,
+            UserPostureProfile.member_id == member.member_id,
+        )
+        .first()
+    )
+    if not profile:
+        raise HTTPException(status_code=404, detail="기준 자세를 찾을 수 없습니다.")
+
+    db.delete(profile)
+    db.commit()
 
 
 @router.post("/analyze", response_model=WebcamAnalyzeResponse)
@@ -166,6 +229,18 @@ async def analyze_webcam(
     reference = profile.reference_landmarks.get("landmarks", [])
     result = compare_posture(pose_result.landmarks, reference)
 
+    landmarks_out = [
+        LandmarkData(
+            id=i,
+            name=lm.name if hasattr(lm, "name") else str(i),
+            x=lm.x,
+            y=lm.y,
+            z=lm.z,
+            visibility=lm.visibility,
+        )
+        for i, lm in enumerate(pose_result.landmarks)
+    ]
+
     return WebcamAnalyzeResponse(
         status=result.status,
         deviation_score=result.deviation_score,
@@ -173,4 +248,7 @@ async def analyze_webcam(
         profile_name=profile.profile_name,
         issues=result.issues,
         per_point=result.per_point,
+        landmarks=landmarks_out,
+        frame_width=frame.shape[1],
+        frame_height=frame.shape[0],
     )
