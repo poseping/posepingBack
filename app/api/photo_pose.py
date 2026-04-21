@@ -3,7 +3,7 @@ from typing import Literal
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -71,7 +71,9 @@ class AnalyzePhotosResponse(BaseModel):
 
 
 class SaveAnalysisRequest(BaseModel):
-    save_token: str
+    save_token: str | None = None
+    analysis_id: int | None = None
+    request_id: int | None = Field(default=None, alias="id")
 
 
 class SaveAnalysisResponse(BaseModel):
@@ -79,6 +81,24 @@ class SaveAnalysisResponse(BaseModel):
     saved_at: str
     status: Literal["good", "warning", "bad"]
     images_stored: bool
+
+
+class AnalysisRecordResponse(BaseModel):
+    analysis_id: int
+    side_view: Literal["left", "right"]
+    status: Literal["good", "warning", "bad"]
+    confidence: float
+    analyzed_at: str
+    created_at: str
+    images_stored: bool
+    front: FrontMetricsResponse
+    side: SideMetricsResponse
+
+
+class AnalysisHistoryResponse(BaseModel):
+    member_id: int
+    total: int
+    analyses: list[AnalysisRecordResponse]
 
 
 class ManualLandmarkInput(BaseModel):
@@ -168,12 +188,73 @@ async def analyze_manual_landmarks(
     return _build_analysis_response(member.member_id, analysis, front_result, side_result)
 
 
-@router.post("/analyses", response_model=SaveAnalysisResponse)
-async def save_analysis(
-    request: SaveAnalysisRequest,
+@router.get("/analyses", response_model=AnalysisHistoryResponse | AnalysisRecordResponse)
+async def get_analysis(
+    analysis_id: int | None = Query(default=None),
+    request_id: int | None = Query(default=None, alias="id"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     member: Member = Depends(verify_auth),
     db: Session = Depends(get_db),
-) -> SaveAnalysisResponse:
+) -> AnalysisHistoryResponse | AnalysisRecordResponse:
+    target_analysis_id = analysis_id or request_id
+    if target_analysis_id is None:
+        return _analysis_history_to_response(db, member.member_id, limit, offset)
+
+    record = _get_member_analysis(db, member.member_id, target_analysis_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Analysis not found.")
+
+    return _analysis_record_to_response(record)
+
+
+@router.get("/analyses/{analysis_id}", response_model=AnalysisRecordResponse)
+async def get_analysis_by_path(
+    analysis_id: int,
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+) -> AnalysisRecordResponse:
+    record = _get_member_analysis(db, member.member_id, analysis_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Analysis not found.")
+
+    return _analysis_record_to_response(record)
+
+
+@router.post("/analyses/{analysis_id}", response_model=AnalysisRecordResponse)
+async def get_analysis_by_path_post(
+    analysis_id: int,
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+) -> AnalysisRecordResponse:
+    record = _get_member_analysis(db, member.member_id, analysis_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Analysis not found.")
+
+    return _analysis_record_to_response(record)
+
+
+@router.post("/analyses", response_model=SaveAnalysisResponse | AnalysisRecordResponse | AnalysisHistoryResponse)
+async def save_analysis(
+    request: SaveAnalysisRequest | None = Body(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+) -> SaveAnalysisResponse | AnalysisRecordResponse | AnalysisHistoryResponse:
+    if request is None:
+        return _analysis_history_to_response(db, member.member_id, limit, offset)
+
+    target_analysis_id = request.analysis_id or request.request_id
+    if target_analysis_id is not None:
+        record = _get_member_analysis(db, member.member_id, target_analysis_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Analysis not found.")
+        return _analysis_record_to_response(record)
+
+    if not request.save_token:
+        return _analysis_history_to_response(db, member.member_id, limit, offset)
+
     init_services()
 
     try:
@@ -220,6 +301,77 @@ async def save_analysis(
         saved_at=record.created_at.isoformat(),
         status=record.overall_status,
         images_stored=False,
+    )
+
+
+def _get_member_analyses(
+    db: Session,
+    member_id: int,
+    limit: int,
+    offset: int,
+) -> list[PoseAnalysis]:
+    return (
+        db.query(PoseAnalysis)
+        .filter(PoseAnalysis.member_id == member_id)
+        .order_by(PoseAnalysis.analyzed_at.desc(), PoseAnalysis.analysis_id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
+def _analysis_history_to_response(
+    db: Session,
+    member_id: int,
+    limit: int,
+    offset: int,
+) -> AnalysisHistoryResponse:
+    total = db.query(PoseAnalysis).filter(PoseAnalysis.member_id == member_id).count()
+    records = _get_member_analyses(db, member_id, limit, offset)
+
+    return AnalysisHistoryResponse(
+        member_id=member_id,
+        total=total,
+        analyses=[_analysis_record_to_response(record) for record in records],
+    )
+
+
+def _get_member_analysis(
+    db: Session,
+    member_id: int,
+    analysis_id: int,
+) -> PoseAnalysis | None:
+    return (
+        db.query(PoseAnalysis)
+        .filter(
+            PoseAnalysis.analysis_id == analysis_id,
+            PoseAnalysis.member_id == member_id,
+        )
+        .first()
+    )
+
+
+def _analysis_record_to_response(record: PoseAnalysis) -> AnalysisRecordResponse:
+    return AnalysisRecordResponse(
+        analysis_id=record.analysis_id,
+        side_view=record.side_view,
+        status=record.overall_status,
+        confidence=record.overall_confidence,
+        analyzed_at=record.analyzed_at.isoformat(),
+        created_at=record.created_at.isoformat(),
+        images_stored=False,
+        front=FrontMetricsResponse(
+            confidence=record.front_confidence,
+            shoulder_slope=record.shoulder_slope,
+            hip_slope=record.hip_slope,
+            spine_alignment=record.spine_alignment,
+            asymmetry_score=record.asymmetry_score,
+        ),
+        side=SideMetricsResponse(
+            confidence=record.side_confidence,
+            neck_forward_angle=record.neck_forward_angle,
+            forward_head_detected=record.forward_head_detected,
+        ),
     )
 
 
