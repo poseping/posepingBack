@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import verify_auth
 from app.db.session import get_db
-from app.models.models import Member, UserPostureProfile
+from app.models.models import Member, UserPostureProfile, WebcamAlertType, WebcamSession
 from app.services.mediapipe_detector import MediaPipePoseDetector
 from app.services.webcam_comparator import compare as compare_posture
 
@@ -59,6 +59,24 @@ class PostureProfileUpdateRequest(BaseModel):
     is_active: Optional[bool] = None
 
 
+class WebcamSessionRequest(BaseModel):
+    started_at: datetime
+    ended_at: datetime
+    good_count: int = 0
+    warning_count: int = 0
+    bad_count: int = 0
+    cause_counts: Optional[dict] = None
+
+
+class AlertTypeResponse(BaseModel):
+    alert_type_id: str
+    alert_name: str
+    description: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
 class WebcamAnalyzeRequest(BaseModel):
     image_base64: str
     profile_id: Optional[int] = None  # None이면 활성화된 기준 자세 중 첫 번째 사용
@@ -92,6 +110,33 @@ def _get_detector() -> MediaPipePoseDetector:
 
 
 # ==================== 엔드포인트 ====================
+
+@router.post("/session", status_code=201)
+async def create_webcam_session(
+    request: WebcamSessionRequest,
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+):
+    """웹캠 세션 분석 결과 저장 (인증 필요)"""
+    session = WebcamSession(
+        member_id=member.member_id,
+        started_at=request.started_at,
+        ended_at=request.ended_at,
+        good_count=request.good_count,
+        warning_count=request.warning_count,
+        bad_count=request.bad_count,
+        cause_counts=request.cause_counts,
+    )
+    db.add(session)
+    db.commit()
+    return {"session_id": session.session_id}
+
+
+@router.get("/alert-types", response_model=List[AlertTypeResponse])
+async def get_alert_types(db: Session = Depends(get_db)):
+    """자세 알림 유형 목록 조회 (인증 불필요)"""
+    return db.query(WebcamAlertType).all()
+
 
 @router.post("/posture-profile", response_model=PostureProfileResponse, status_code=201)
 async def create_posture_profile(
