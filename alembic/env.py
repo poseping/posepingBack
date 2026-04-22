@@ -5,7 +5,7 @@ from sqlalchemy import pool
 
 from alembic import context
 
-from app.models import Member
+from app.models import Member, PoseAnalysis
 from app.core.config import settings
 from app.db.session import Base
 

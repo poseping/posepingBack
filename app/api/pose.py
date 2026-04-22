@@ -84,7 +84,14 @@ async def analyze_posture(request: PoseDetectionRequest, member: Member = Depend
             raise HTTPException(status_code=400, detail="image_base64가 필요합니다")
 
         # Base64 디코딩
-        image_data = base64.b64decode(request.image_base64)
+        image_base64 = request.image_base64
+        if "," in image_base64:
+            image_base64 = image_base64.split(",", 1)[1]
+
+        try:
+            image_data = base64.b64decode(image_base64)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Base64 이미지 디코딩에 실패했습니다") from exc
         nparr = np.frombuffer(image_data, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
@@ -137,6 +144,8 @@ async def analyze_posture(request: PoseDetectionRequest, member: Member = Depend
             recommendations=analysis.recommendations
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -160,7 +169,13 @@ async def get_landmarks(image_base64: Optional[str] = None, member: Member = Dep
             raise HTTPException(status_code=400, detail="image_base64가 필요합니다")
 
         # Base64 디코딩
-        image_data = base64.b64decode(image_base64)
+        if "," in image_base64:
+            image_base64 = image_base64.split(",", 1)[1]
+
+        try:
+            image_data = base64.b64decode(image_base64)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Base64 이미지 디코딩에 실패했습니다") from exc
         nparr = np.frombuffer(image_data, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
@@ -172,6 +187,8 @@ async def get_landmarks(image_base64: Optional[str] = None, member: Member = Dep
 
         return detector.to_dict(pose_result)
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

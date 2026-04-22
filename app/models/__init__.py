@@ -1,3 +1,3 @@
-from app.models.models import Member
+from app.models.models import Member, PoseAnalysis
 
-__all__ = ["Member"]
+__all__ = ["Member", "PoseAnalysis"]
