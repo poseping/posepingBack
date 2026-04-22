@@ -100,6 +100,14 @@ async def create_posture_profile(
     db: Session = Depends(get_db),
 ):
     """기준 자세 등록 (인증 필요)"""
+    active_count = (
+        db.query(UserPostureProfile)
+        .filter(UserPostureProfile.member_id == member.member_id, UserPostureProfile.is_active == True)
+        .count()
+    )
+    if active_count >= 3:
+        raise HTTPException(status_code=400, detail="활성화된 기준 자세는 최대 3개까지 등록할 수 있습니다.")
+
     landmarks_dict = {
         "landmarks": [lm.model_dump() for lm in request.reference_landmarks]
     }
@@ -160,6 +168,14 @@ async def update_posture_profile(
     if request.description is not None:
         profile.description = request.description
     if request.is_active is not None:
+        if request.is_active and not profile.is_active:
+            active_count = (
+                db.query(UserPostureProfile)
+                .filter(UserPostureProfile.member_id == member.member_id, UserPostureProfile.is_active == True)
+                .count()
+            )
+            if active_count >= 3:
+                raise HTTPException(status_code=400, detail="활성화된 기준 자세는 최대 3개까지 등록할 수 있습니다.")
         profile.is_active = request.is_active
 
     profile.updated_at = datetime.utcnow()
@@ -205,8 +221,8 @@ async def analyze_webcam(
     if request.profile_id:
         query = query.filter(UserPostureProfile.profile_id == request.profile_id)
 
-    profile = query.order_by(UserPostureProfile.display_order).first()
-    if not profile:
+    profiles = query.order_by(UserPostureProfile.display_order).all()
+    if not profiles:
         raise HTTPException(status_code=404, detail="활성화된 기준 자세가 없습니다. 기준 자세를 먼저 등록해주세요.")
 
     # 이미지 디코딩
@@ -225,9 +241,24 @@ async def analyze_webcam(
     if not pose_result.is_detected:
         raise HTTPException(status_code=422, detail="자세를 감지할 수 없습니다. 카메라를 조정해주세요.")
 
-    # 기준 자세와 비교
-    reference = profile.reference_landmarks.get("landmarks", [])
-    result = compare_posture(pose_result.landmarks, reference)
+    # 모든 활성 프로필과 비교 → deviation_score가 가장 낮은 프로필 선택
+    # (듀얼모니터 등 여러 기준 자세 중 현재 자세와 가장 가까운 것을 자동 매칭)
+    best_profile = profiles[0]
+    best_result = compare_posture(
+        pose_result.landmarks,
+        profiles[0].reference_landmarks.get("landmarks", []),
+    )
+    for p in profiles[1:]:
+        candidate = compare_posture(
+            pose_result.landmarks,
+            p.reference_landmarks.get("landmarks", []),
+        )
+        if candidate.deviation_score < best_result.deviation_score:
+            best_profile = p
+            best_result = candidate
+
+    profile = best_profile
+    result = best_result
 
     landmarks_out = [
         LandmarkData(
