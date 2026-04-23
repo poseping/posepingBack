@@ -68,6 +68,26 @@ class WebcamSessionRequest(BaseModel):
     cause_counts: Optional[dict] = None
 
 
+class WebcamSessionHistoryItem(BaseModel):
+    session_id: int
+    started_at: datetime
+    ended_at: Optional[datetime]
+    good_count: int
+    warning_count: int
+    bad_count: int
+    total_count: int
+    good_ratio: float
+    cause_counts: Optional[dict]
+
+    class Config:
+        from_attributes = True
+
+
+class WebcamHistoryResponse(BaseModel):
+    sessions: List[WebcamSessionHistoryItem]
+    total: int
+
+
 class AlertTypeResponse(BaseModel):
     alert_type_id: str
     alert_name: str
@@ -130,6 +150,43 @@ async def create_webcam_session(
     db.add(session)
     db.commit()
     return {"session_id": session.session_id}
+
+
+@router.get("/history", response_model=WebcamHistoryResponse)
+async def get_webcam_history(
+    limit: int = 10,
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+):
+    """웹캠 세션 기록 조회 (인증 필요)"""
+    total = db.query(WebcamSession).filter(WebcamSession.member_id == member.member_id).count()
+    rows = (
+        db.query(WebcamSession)
+        .filter(WebcamSession.member_id == member.member_id)
+        .order_by(WebcamSession.started_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    sessions = []
+    for row in rows:
+        total_count = row.good_count + row.warning_count + row.bad_count
+        good_ratio = row.good_count / total_count if total_count > 0 else 0.0
+        sessions.append(
+            WebcamSessionHistoryItem(
+                session_id=row.session_id,
+                started_at=row.started_at,
+                ended_at=row.ended_at,
+                good_count=row.good_count,
+                warning_count=row.warning_count,
+                bad_count=row.bad_count,
+                total_count=total_count,
+                good_ratio=round(good_ratio, 4),
+                cause_counts=row.cause_counts,
+            )
+        )
+
+    return WebcamHistoryResponse(sessions=sessions, total=total)
 
 
 @router.get("/alert-types", response_model=List[AlertTypeResponse])
