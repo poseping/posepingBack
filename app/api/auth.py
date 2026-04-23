@@ -33,6 +33,12 @@ class GoogleLoginRequest(BaseModel):
     token: str  # 구글 ID Token 또는 인가 코드
 
 
+class AdminLoginRequest(BaseModel):
+    """임시 관리자 로그인 요청"""
+    admin_id: str
+    password: str
+
+
 class UserResponse(BaseModel):
     """사용자 정보 응답"""
     member_id: int
@@ -226,6 +232,57 @@ async def verify_token(token: str, db: Session = Depends(get_db)):
 
 
 # ==================== 개발용 로그인 ====================
+
+@router.post("/admin-login", response_model=LoginResponse)
+async def admin_login(request: AdminLoginRequest, db: Session = Depends(get_db)):
+    """
+    임시 관리자 로그인.
+    소셜 로그인 없이 관리자 JWT를 발급하기 위한 개발용 엔드포인트.
+    """
+    from app.core.config import settings
+    if settings.app_env != "dev":
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if request.admin_id != "admin" or request.password != "admin1234":
+        raise HTTPException(status_code=401, detail="Invalid admin credentials")
+
+    member = db.query(Member).filter(
+        Member.provider == "KAKAO",
+        Member.provider_user_id == "admin-local-user",
+    ).first()
+
+    if not member:
+        member = Member(
+            provider="KAKAO",
+            provider_user_id="admin-local-user",
+            email="admin@local.dev",
+            name="관리자",
+            nickname="관리자",
+            status="ACTIVE",
+            role="ADMIN",
+            email_verified=True,
+            last_login_at=datetime.now(timezone.utc),
+        )
+        db.add(member)
+        db.commit()
+        db.refresh(member)
+    else:
+        member.status = "ACTIVE"
+        member.role = "ADMIN"
+        member.last_login_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(member)
+
+    access_token = JWTService.create_access_token(member.member_id)
+
+    return LoginResponse(
+        success=True,
+        access_token=access_token,
+        token_type="Bearer",
+        expires_in=3600,
+        user=UserResponse.from_orm(member),
+    )
+
 
 @router.post("/dev-login", response_model=LoginResponse)
 async def dev_login(db: Session = Depends(get_db)):

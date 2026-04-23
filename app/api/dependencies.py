@@ -28,3 +28,10 @@ async def verify_auth(
         raise HTTPException(status_code=401, detail="사용자를 찾을 수 없음")
 
     return member
+
+
+async def require_admin(member: Member = Depends(verify_auth)) -> Member:
+    if member.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+
+    return member
