@@ -140,3 +140,24 @@ class UserPostureProfile(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
+
+class UserLifestyleHabit(Base):
+    __tablename__ = "user_lifestyle_habits"
+
+    __table_args__ = (
+        UniqueConstraint("member_id", name="uq_user_lifestyle_habits_member_id"),
+    )
+
+    habit_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    member_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("members.member_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sitting_hours_per_day: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    exercise_days_per_week: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    pain_areas: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
