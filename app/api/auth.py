@@ -17,11 +17,17 @@ from app.services.auth_service import (
     GoogleOAuthService,
 )
 from app.services.nickname_service import generate_nickname_with_fallback
+from app.api.dependencies import verify_auth
 
 router = APIRouter()
 
 
 # ==================== Request/Response 모델 ====================
+
+class UpdateProfileRequest(BaseModel):
+    """프로필 수정 요청"""
+    nickname: str
+
 
 class KakaoLoginRequest(BaseModel):
     """카카오 로그인 요청"""
@@ -335,3 +341,34 @@ async def logout(token: str):
         클라이언트에서 로컬스토리지의 토큰 삭제로 처리됨
     """
     return {"success": True, "message": "로그아웃 되었습니다"}
+
+
+# ==================== 내 정보 수정 ====================
+
+@router.patch("/me", response_model=UserResponse)
+async def update_profile(
+    request: UpdateProfileRequest,
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+):
+    """닉네임 변경"""
+    nickname = request.nickname.strip()
+    if not nickname:
+        raise HTTPException(status_code=400, detail="닉네임을 입력해주세요")
+    if len(nickname) > 20:
+        raise HTTPException(status_code=400, detail="닉네임은 20자 이하여야 합니다")
+    member.nickname = nickname
+    db.commit()
+    db.refresh(member)
+    return UserResponse.from_orm(member)
+
+
+@router.delete("/me")
+async def delete_account(
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+):
+    """회원 탈퇴 (status WITHDRAWN 처리)"""
+    member.status = "WITHDRAWN"
+    db.commit()
+    return {"success": True, "message": "회원 탈퇴가 완료되었습니다"}
