@@ -6,7 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.db.session import get_engine
-from app.api import admin, pose, auth, webcam_pose, photo_pose
+from app.api import admin, assistant, auth, photo_pose, pose, webcam_pose
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -30,6 +30,7 @@ app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(pose.router, prefix="/api/pose", tags=["pose"])
 app.include_router(webcam_pose.router, prefix="/api/webcam", tags=["webcam"])
 app.include_router(photo_pose.router, prefix="/api/photo", tags=["photo"])
+app.include_router(assistant.router, prefix="/api/assistant", tags=["assistant"])
 
 
 @app.on_event("startup")
