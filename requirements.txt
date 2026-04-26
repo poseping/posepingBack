@@ -25,6 +25,7 @@ numpy==1.26.4
 
 # External API
 anthropic==0.84.0
+google-genai==1.73.1
 
 # Dev / Test
 pytest==9.0.2

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import verify_auth
 from app.db.session import get_db
 from app.models.models import Member, UserPostureProfile, WebcamAlertType, WebcamSession
+from app.services.webcam_ai_context import build_ai_context
 from app.services.mediapipe_detector import MediaPipePoseDetector
 from app.services.webcam_comparator import compare as compare_posture
 
@@ -114,6 +115,8 @@ class WebcamAnalyzeResponse(BaseModel):
     profile_name: str
     issues: List[str]
     per_point: dict
+    ai_context: dict
+    judgement_signature: str
     landmarks: List[LandmarkData]
     frame_width: int
     frame_height: int
@@ -374,6 +377,8 @@ async def analyze_webcam(
         for i, lm in enumerate(pose_result.landmarks)
     ]
 
+    ai_context = build_ai_context(result)
+
     return WebcamAnalyzeResponse(
         status=result.status,
         deviation_score=result.deviation_score,
@@ -381,6 +386,8 @@ async def analyze_webcam(
         profile_name=profile.profile_name,
         issues=result.issues,
         per_point=result.per_point,
+        ai_context=ai_context,
+        judgement_signature=ai_context["judgement_signature"],
         landmarks=landmarks_out,
         frame_width=frame.shape[1],
         frame_height=frame.shape[0],

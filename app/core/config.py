@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     database_url: str = ""
     database_url_direct: str = ""
     secret_key: str = "change-me"
+    vertex_ai_api_key: str = ""
+    gemini_model: str = "gemini-3.1-flash-lite-preview"
 
     model_config = SettingsConfigDict(
         env_file=".env",
