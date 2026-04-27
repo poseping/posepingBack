@@ -31,12 +31,12 @@ class UpdateProfileRequest(BaseModel):
 
 class KakaoLoginRequest(BaseModel):
     """카카오 로그인 요청"""
-    access_token: str  # 카카오 액세스 토큰
+    code: str  # 카카오 인가 코드
 
 
 class GoogleLoginRequest(BaseModel):
     """구글 로그인 요청"""
-    token: str  # 구글 ID Token 또는 인가 코드
+    code: str  # 구글 인가 코드
 
 
 class AdminLoginRequest(BaseModel):
@@ -87,22 +87,27 @@ async def kakao_login(request: KakaoLoginRequest, db: Session = Depends(get_db))
     Returns:
         LoginResponse: JWT 토큰 및 사용자 정보
     """
-    print(f"🔍 카카오 액세스 토큰: {request.access_token[:20]}...")
+    print(f"🔍 카카오 인가 코드: {request.code[:20]}...")
 
-    # 1️⃣ 카카오에서 사용자 정보 조회 (액세스 토큰 사용)
-    user_info = KakaoOAuthService.get_user_info(request.access_token)
+    # 1️⃣ 인가 코드로 카카오 액세스 토큰 교환
+    token_data = KakaoOAuthService.get_access_token(request.code)
+    if not token_data or "access_token" not in token_data:
+        raise HTTPException(status_code=401, detail="카카오 인증 실패")
+
+    # 2️⃣ 카카오에서 사용자 정보 조회
+    user_info = KakaoOAuthService.get_user_info(token_data["access_token"])
     print(f"🔍 사용자정보 조회 결과: {user_info}")
 
     if not user_info:
         raise HTTPException(status_code=401, detail="카카오 인증 실패")
 
-    # 2️⃣ DB에서 기존 회원 조회
+    # 3️⃣ DB에서 기존 회원 조회
     member = db.query(Member).filter(
         Member.provider == "KAKAO",
         Member.provider_user_id == user_info["social_id"],
     ).first()
 
-    # 3️⃣ 신규 회원 생성 또는 기존 회원 업데이트
+    # 4️⃣ 신규 회원 생성 또는 기존 회원 업데이트
     if not member:
         # 신규 회원 - 닉네임 자동 생성
         # 카카오는 닉네임 정보가 없으므로 "형용사+동물" 형식으로 자동 생성
@@ -127,7 +132,7 @@ async def kakao_login(request: KakaoLoginRequest, db: Session = Depends(get_db))
         member.profile_image_url = user_info.get("profile_image_url") or member.profile_image_url
         db.commit()
 
-    # 4️⃣ JWT 토큰 생성
+    # 5️⃣ JWT 토큰 생성
     access_token = JWTService.create_access_token(member.member_id)
 
     return LoginResponse(
@@ -153,12 +158,17 @@ async def google_login(request: GoogleLoginRequest, db: Session = Depends(get_db
     Returns:
         LoginResponse: JWT 토큰 및 사용자 정보
     """
-    # 1️⃣ 구글 ID Token 검증
-    user_info_google = GoogleOAuthService.verify_id_token(request.token)
+    # 1️⃣ 인가 코드로 구글 토큰 교환 (팝업 flow → redirect_uri="postmessage")
+    token_data = GoogleOAuthService.get_access_token(request.code, redirect_uri="postmessage")
+    if not token_data or "id_token" not in token_data:
+        raise HTTPException(status_code=401, detail="구글 인증 실패")
+
+    # 2️⃣ ID Token으로 사용자 정보 검증
+    user_info_google = GoogleOAuthService.verify_id_token(token_data["id_token"])
     if not user_info_google:
         raise HTTPException(status_code=401, detail="구글 인증 실패")
 
-    # 2️⃣ 필요한 정보 추출
+    # 3️⃣ 필요한 정보 추출
     social_id = user_info_google.get("sub")  # Google User ID
     nickname = user_info_google.get("name")
     profile_image_url = user_info_google.get("picture")
@@ -166,13 +176,13 @@ async def google_login(request: GoogleLoginRequest, db: Session = Depends(get_db
     if not social_id:
         raise HTTPException(status_code=401, detail="사용자 정보 조회 실패")
 
-    # 3️⃣ DB에서 기존 회원 조회
+    # 4️⃣ DB에서 기존 회원 조회
     member = db.query(Member).filter(
         Member.provider == "GOOGLE",
         Member.provider_user_id == social_id,
     ).first()
 
-    # 4️⃣ 신규 회원 생성 또는 기존 회원 업데이트
+    # 5️⃣ 신규 회원 생성 또는 기존 회원 업데이트
     if not member:
         # 신규 회원 - 닉네임 설정
         # 구글은 name이 있으면 그것을 우선 사용, 중복되면 자동 생성
@@ -197,7 +207,7 @@ async def google_login(request: GoogleLoginRequest, db: Session = Depends(get_db
         member.profile_image_url = profile_image_url or member.profile_image_url
         db.commit()
 
-    # 5️⃣ JWT 토큰 생성
+    # 6️⃣ JWT 토큰 생성
     access_token = JWTService.create_access_token(member.member_id)
 
     return LoginResponse(
