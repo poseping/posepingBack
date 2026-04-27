@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import base64
@@ -158,18 +158,33 @@ async def create_webcam_session(
 @router.get("/history", response_model=WebcamHistoryResponse)
 async def get_webcam_history(
     limit: int = 10,
+    period: Optional[str] = None,  # 'day' | 'week' | 'month'
     member: Member = Depends(verify_auth),
     db: Session = Depends(get_db),
 ):
-    """웹캠 세션 기록 조회 (인증 필요)"""
-    total = db.query(WebcamSession).filter(WebcamSession.member_id == member.member_id).count()
-    rows = (
-        db.query(WebcamSession)
-        .filter(WebcamSession.member_id == member.member_id)
-        .order_by(WebcamSession.started_at.desc())
-        .limit(limit)
-        .all()
-    )
+    """웹캠 세션 기록 조회 (인증 필요)
+    - period 지정 시: 해당 기간 데이터 전체 반환 (limit 무시)
+    - period 미지정 시: 최근 limit개 반환
+    """
+    base_query = db.query(WebcamSession).filter(WebcamSession.member_id == member.member_id)
+
+    if period in ("day", "week", "month"):
+        now = datetime.now(timezone.utc)
+        if period == "day":
+            cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "week":
+            cutoff = now - timedelta(days=7)
+        else:
+            cutoff = now - timedelta(days=30)
+        base_query = base_query.filter(WebcamSession.started_at >= cutoff)
+
+    total = base_query.count()
+    rows = base_query.order_by(WebcamSession.started_at.desc())
+
+    if period not in ("day", "week", "month"):
+        rows = rows.limit(limit)
+
+    rows = rows.all()
 
     sessions = []
     for row in rows:
