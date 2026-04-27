@@ -45,6 +45,11 @@ class AdminLoginRequest(BaseModel):
     password: str
 
 
+class DevLoginRequest(BaseModel):
+    """개발용 회원 선택 로그인 요청"""
+    member_id: int
+
+
 class UserResponse(BaseModel):
     """사용자 정보 응답"""
     member_id: int
@@ -64,6 +69,7 @@ class LoginResponse(BaseModel):
     token_type: str
     expires_in: int  # 초 단위
     user: UserResponse
+    is_new_member: bool
 
 
 class VerifyResponse(BaseModel):
@@ -71,6 +77,27 @@ class VerifyResponse(BaseModel):
     success: bool
     user: Optional[UserResponse] = None
     error: Optional[str] = None
+
+
+class DevMemberResponse(BaseModel):
+    """개발용 선택 로그인 회원 응답"""
+    member_id: int
+    provider: str
+    nickname: Optional[str]
+    role: str
+
+    class Config:
+        from_attributes = True
+
+
+def should_show_first_login(member: Member | None, created_in_request: bool = False) -> bool:
+    if created_in_request:
+        return True
+    if member is None:
+        return False
+    if member.last_login_at is None:
+        return True
+    return member.last_login_at <= member.created_at
 
 
 # ==================== 카카오 로그인 ====================
@@ -108,7 +135,9 @@ async def kakao_login(request: KakaoLoginRequest, db: Session = Depends(get_db))
     ).first()
 
     # 4️⃣ 신규 회원 생성 또는 기존 회원 업데이트
-    if not member:
+    is_new_member = should_show_first_login(member, created_in_request=member is None)
+
+    if is_new_member:
         # 신규 회원 - 닉네임 자동 생성
         # 카카오는 닉네임 정보가 없으므로 "형용사+동물" 형식으로 자동 생성
         auto_nickname = generate_nickname_with_fallback(db)
@@ -141,6 +170,7 @@ async def kakao_login(request: KakaoLoginRequest, db: Session = Depends(get_db))
         token_type="Bearer",
         expires_in=3600,  # 1시간
         user=UserResponse.from_orm(member),
+        is_new_member=is_new_member,
     )
 
 
@@ -170,7 +200,6 @@ async def google_login(request: GoogleLoginRequest, db: Session = Depends(get_db
 
     # 3️⃣ 필요한 정보 추출
     social_id = user_info_google.get("sub")  # Google User ID
-    nickname = user_info_google.get("name")
     profile_image_url = user_info_google.get("picture")
 
     if not social_id:
@@ -183,10 +212,11 @@ async def google_login(request: GoogleLoginRequest, db: Session = Depends(get_db
     ).first()
 
     # 5️⃣ 신규 회원 생성 또는 기존 회원 업데이트
-    if not member:
-        # 신규 회원 - 닉네임 설정
-        # 구글은 name이 있으면 그것을 우선 사용, 중복되면 자동 생성
-        final_nickname = generate_nickname_with_fallback(db, preferred_nickname=nickname)
+    is_new_member = should_show_first_login(member, created_in_request=member is None)
+
+    if is_new_member:
+        # 신규 회원 - 닉네임 자동 생성
+        final_nickname = generate_nickname_with_fallback(db)
 
         member = Member(
             provider="GOOGLE",
@@ -216,6 +246,7 @@ async def google_login(request: GoogleLoginRequest, db: Session = Depends(get_db
         token_type="Bearer",
         expires_in=3600,  # 1시간
         user=UserResponse.from_orm(member),
+        is_new_member=is_new_member,
     )
 
 
@@ -267,7 +298,9 @@ async def admin_login(request: AdminLoginRequest, db: Session = Depends(get_db))
         Member.provider_user_id == "admin-local-user",
     ).first()
 
-    if not member:
+    is_new_member = should_show_first_login(member, created_in_request=member is None)
+
+    if is_new_member:
         member = Member(
             provider="KAKAO",
             provider_user_id="admin-local-user",
@@ -297,26 +330,27 @@ async def admin_login(request: AdminLoginRequest, db: Session = Depends(get_db))
         token_type="Bearer",
         expires_in=3600,
         user=UserResponse.from_orm(member),
+        is_new_member=is_new_member,
     )
 
 
-@router.post("/dev-login", response_model=LoginResponse)
-async def dev_login(db: Session = Depends(get_db)):
+@router.get("/dev-members", response_model=list[DevMemberResponse])
+async def get_dev_members(db: Session = Depends(get_db)):
     """
-    개발용 로그인 (DEBUG 환경에서만 동작)
-    소셜 로그인 없이 테스트용 JWT 토큰 발급
+    개발용 선택 로그인 대상 회원 목록 조회.
+    member_id 6~15 범위의 회원과 기존 개발용 계정을 함께 반환한다.
     """
     from app.core.config import settings
     if settings.app_env != "dev":
         raise HTTPException(status_code=404, detail="Not found")
 
-    member = db.query(Member).filter(
+    legacy_dev_member = db.query(Member).filter(
         Member.provider == "KAKAO",
         Member.provider_user_id == "dev-test-user",
     ).first()
 
-    if not member:
-        member = Member(
+    if not legacy_dev_member:
+        legacy_dev_member = Member(
             provider="KAKAO",
             provider_user_id="dev-test-user",
             nickname="개발자",
@@ -324,9 +358,48 @@ async def dev_login(db: Session = Depends(get_db)):
             role="USER",
             last_login_at=datetime.now(timezone.utc),
         )
-        db.add(member)
+        db.add(legacy_dev_member)
         db.commit()
-        db.refresh(member)
+        db.refresh(legacy_dev_member)
+
+    members = (
+        db.query(Member)
+        .filter(Member.member_id >= 6, Member.member_id <= 15)
+        .order_by(Member.member_id.asc())
+        .all()
+    )
+
+    member_map = {member.member_id: member for member in members}
+    member_map[legacy_dev_member.member_id] = legacy_dev_member
+
+    return [
+        DevMemberResponse.from_orm(member)
+        for member in sorted(member_map.values(), key=lambda member: member.member_id)
+    ]
+
+
+@router.post("/dev-login", response_model=LoginResponse)
+async def dev_login(request: DevLoginRequest, db: Session = Depends(get_db)):
+    """
+    개발용 선택 로그인 (DEBUG 환경에서만 동작)
+    member_id 6~15 범위의 기존 회원으로 JWT 토큰 발급
+    """
+    from app.core.config import settings
+    if settings.app_env != "dev":
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if request.member_id < 6 or request.member_id > 15:
+        raise HTTPException(status_code=400, detail="허용된 개발용 회원 ID 범위를 벗어났습니다.")
+
+    member = db.query(Member).filter(Member.member_id == request.member_id).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="선택한 회원을 찾을 수 없습니다.")
+
+    is_new_member = should_show_first_login(member)
+
+    member.last_login_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(member)
 
     access_token = JWTService.create_access_token(member.member_id)
 
@@ -336,6 +409,7 @@ async def dev_login(db: Session = Depends(get_db)):
         token_type="Bearer",
         expires_in=3600,
         user=UserResponse.from_orm(member),
+        is_new_member=is_new_member,
     )
 
 
@@ -351,6 +425,7 @@ async def logout(token: str):
         클라이언트에서 로컬스토리지의 토큰 삭제로 처리됨
     """
     return {"success": True, "message": "로그아웃 되었습니다"}
+
 
 
 # ==================== 내 정보 수정 ====================
