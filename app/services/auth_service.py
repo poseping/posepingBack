@@ -165,12 +165,13 @@ class GoogleOAuthService:
             return None
 
     @staticmethod
-    def get_access_token(code: str) -> Optional[Dict[str, Any]]:
+    def get_access_token(code: str, redirect_uri: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         인가 코드로 구글 액세스 토큰 받기 (옵션 2: 서버에서 처리)
 
         Args:
             code: 구글에서 받은 인가 코드
+            redirect_uri: 팝업 flow는 "postmessage", 리다이렉트 flow는 실제 URI
 
         Returns:
             access_token 등 응답 데이터
@@ -182,7 +183,7 @@ class GoogleOAuthService:
                 "client_id": GOOGLE_CLIENT_ID,
                 "client_secret": GOOGLE_CLIENT_SECRET,
                 "code": code,
-                "redirect_uri": GOOGLE_REDIRECT_URI,
+                "redirect_uri": redirect_uri if redirect_uri is not None else GOOGLE_REDIRECT_URI,
             }
 
             response = requests.post(url, data=data)
