@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+import contextlib
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from datetime import datetime
 
 from app.api.dependencies import verify_auth
 from app.core.config import settings
@@ -39,6 +42,19 @@ def get_assistant_service() -> GeminiAssistantService:
             model_name=settings.gemini_model,
         )
     return assistant_service
+
+
+async def await_with_client_disconnect(http_request: Request, task):
+    while not task.done():
+        if await http_request.is_disconnected():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            raise HTTPException(status_code=499, detail="Client closed request.")
+
+        await asyncio.sleep(0.1)
+
+    return await task
 
 
 class WebcamCommentRequest(BaseModel):
@@ -160,10 +176,10 @@ async def generate_photo_comment(
 @router.post("/onboarding-chat", response_model=OnboardingChatResponse)
 async def onboarding_chat(
     request: OnboardingChatRequest,
+    http_request: Request,
     member: Member = Depends(verify_auth),
     db: Session = Depends(get_db),
 ) -> OnboardingChatResponse:
-    _ = member
     service = get_assistant_service()
     collected_fields = normalize_collected_fields(request.collected_fields)
     turn_count = count_user_turns(request.chat_history, request.user_prompt)
@@ -171,7 +187,7 @@ async def onboarding_chat(
 
     if len(missing_fields) == 0:
         return OnboardingChatResponse(
-            reply="기본 정보 확인을 마쳤습니다.",
+            reply="생활 습관 분석이 완료되었어요!",
             done=True,
             stop_reason="completed",
             collected_fields=collected_fields,
@@ -192,15 +208,20 @@ async def onboarding_chat(
         )
 
     try:
-        result: OnboardingChatResult = await service.generate_onboarding_reply(
-            user_prompt=request.user_prompt,
-            context_data=build_onboarding_context(
-                collected_fields=collected_fields,
-                missing_fields=missing_fields,
-                current_turn=turn_count,
-                max_turns=ONBOARDING_MAX_TURNS,
+        result: OnboardingChatResult = await await_with_client_disconnect(
+            http_request,
+            asyncio.create_task(
+                service.generate_onboarding_reply(
+                    user_prompt=request.user_prompt,
+                    context_data=build_onboarding_context(
+                        collected_fields=collected_fields,
+                        missing_fields=missing_fields,
+                        current_turn=turn_count,
+                        max_turns=ONBOARDING_MAX_TURNS,
+                    ),
+                    chat_history=request.chat_history,
+                )
             ),
-            chat_history=request.chat_history,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -237,7 +258,7 @@ async def onboarding_chat(
                 db.rollback()
                 raise HTTPException(status_code=503, detail="Failed to save onboarding data.") from exc
 
-        closing_reply = "기본 정보 확인을 마쳤습니다."
+        closing_reply = "생활 습관 분석이 완료되었어요!"
         if stop_reason == "max_turn_reached":
             closing_reply = "여기까지 정보를 정리할게요."
 

@@ -20,6 +20,7 @@ from app.services.nickname_service import generate_nickname_with_fallback
 from app.api.dependencies import verify_auth
 
 router = APIRouter()
+DEV_ALWAYS_FIRST_LOGIN_MEMBER_IDS = {13}
 
 
 # ==================== Request/Response 모델 ====================
@@ -395,7 +396,10 @@ async def dev_login(request: DevLoginRequest, db: Session = Depends(get_db)):
     if not member:
         raise HTTPException(status_code=404, detail="선택한 회원을 찾을 수 없습니다.")
 
-    is_new_member = should_show_first_login(member)
+    is_new_member = (
+        member.member_id in DEV_ALWAYS_FIRST_LOGIN_MEMBER_IDS
+        or should_show_first_login(member)
+    )
 
     member.last_login_at = datetime.now(timezone.utc)
     db.commit()

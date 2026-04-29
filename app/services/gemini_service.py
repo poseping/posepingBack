@@ -1,5 +1,8 @@
+import asyncio
 import json
 import logging
+import random
+import time
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -15,24 +18,27 @@ class ChatMessage(BaseModel):
 
 
 class WebcamCommentResult(BaseModel):
-    comment: str = Field(..., min_length=1, max_length=60)
+    comment: str
 
 
 class PhotoCommentResult(BaseModel):
-    comment: str = Field(..., min_length=1, max_length=120)
+    comment: str
 
 
 class OnboardingExtractedField(BaseModel):
-    key: str = Field(..., min_length=1, max_length=100)
-    value: str = Field(..., min_length=1, max_length=200)
+    key: str
+    value: str
 
 
 class OnboardingChatResult(BaseModel):
-    reply: str | None = Field(default=None, min_length=1, max_length=120)
+    reply: str | None = None
     extracted_fields: list[OnboardingExtractedField] = Field(default_factory=list)
 
 
 class GeminiAssistantService:
+    REQUEST_CACHE_TTL_SECONDS = 10.0
+    MAX_429_RETRIES = 3
+
     WEBCAM_SYSTEM_PROMPT = """
 # Role
 You are a real-time posture correction assistant.
@@ -141,6 +147,7 @@ Target about 10 to 30 Korean characters when asking a question.
 Never exceed 60 Korean characters in the reply text.
 Do not diagnose.
 Do not use technical jargon.
+Do not copying early history.
 
 # Conversation Rules
 Ask about only one missing field at a time.
@@ -159,6 +166,8 @@ If the current turn is the last allowed turn, return a short closing message ins
         self.api_key = api_key.strip()
         self.model_name = model_name.strip()
         self._client = None
+        self._response_cache: dict[str, tuple[float, BaseModel]] = {}
+        self._inflight_requests: dict[str, asyncio.Task] = {}
 
     @property
     def enabled(self) -> bool:
@@ -217,6 +226,54 @@ If the current turn is the last allowed turn, return a short closing message ins
         if not self.enabled:
             raise RuntimeError("Gemini API key is not configured.")
 
+        normalized_chat_history = chat_history or []
+        cache_key = self._build_request_cache_key(
+            response_schema=response_schema,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            chat_history=normalized_chat_history,
+            context_data=context_data,
+        )
+
+        cached_result = self._get_cached_response(cache_key, response_schema)
+        if cached_result is not None:
+            if settings.app_env.lower() == "dev":
+                logger.info("Gemini cache hit for %s", response_schema.__name__)
+            return cached_result
+
+        inflight_task = self._inflight_requests.get(cache_key)
+        if inflight_task is not None:
+            if settings.app_env.lower() == "dev":
+                logger.info("Gemini inflight reuse for %s", response_schema.__name__)
+            return await inflight_task
+
+        task = asyncio.create_task(
+            self._perform_generate_json_response(
+                cache_key=cache_key,
+                response_schema=response_schema,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                chat_history=normalized_chat_history,
+                context_data=context_data,
+            )
+        )
+        self._inflight_requests[cache_key] = task
+        try:
+            return await task
+        finally:
+            current_task = self._inflight_requests.get(cache_key)
+            if current_task is task:
+                self._inflight_requests.pop(cache_key, None)
+
+    async def _perform_generate_json_response(
+        self,
+        cache_key: str,
+        response_schema: type[BaseModel],
+        system_prompt: str,
+        user_prompt: str,
+        chat_history: list[ChatMessage],
+        context_data: dict[str, Any] | None,
+    ):
         try:
             client = self._get_client()
             if settings.app_env.lower() == "dev":
@@ -226,19 +283,18 @@ If the current turn is the last allowed turn, return a short closing message ins
                         model=self.model_name,
                         system_prompt=system_prompt,
                         user_prompt=user_prompt,
-                        chat_history=chat_history or [],
+                        chat_history=chat_history,
                         context_data=context_data,
                         response_schema=response_schema,
                     ),
                 )
-            response = await client.aio.models.generate_content(
-                model=self.model_name,
-                contents=self._build_contents(
-                    user_prompt=user_prompt,
-                    chat_history=chat_history or [],
-                    context_data=context_data,
-                ),
-                config=self._build_config(system_prompt, response_schema),
+            response = await self._request_with_retry(
+                client=client,
+                response_schema=response_schema,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                chat_history=chat_history,
+                context_data=context_data,
             )
             if settings.app_env.lower() == "dev":
                 logger.info("Gemini raw response:\n%s", self._build_debug_response(response))
@@ -248,16 +304,27 @@ If the current turn is the last allowed turn, return a short closing message ins
 
         parsed = getattr(response, "parsed", None)
         if isinstance(parsed, response_schema):
+            self._store_cached_response(cache_key, parsed)
             return parsed
         if isinstance(parsed, dict):
-            return response_schema.model_validate(parsed)
+            validated = response_schema.model_validate(parsed)
+            self._store_cached_response(cache_key, validated)
+            return validated
 
         text = getattr(response, "text", None)
         if text:
-            try:
-                return response_schema.model_validate_json(text)
-            except Exception as exc:
-                logger.warning("Gemini returned non-JSON response: %s", exc)
+            logger.warning(
+                "Gemini structured parse missing for %s. Falling back to plain text JSON parsing.",
+                response_schema.__name__,
+            )
+            parsed_text = self._parse_response_text(response_schema, text)
+            if parsed_text is not None:
+                logger.warning(
+                    "Gemini plain text fallback succeeded for %s.",
+                    response_schema.__name__,
+                )
+                self._store_cached_response(cache_key, parsed_text)
+                return parsed_text
 
         diag = self._diagnose_empty_response(response)
         logger.warning("Gemini returned an empty/invalid response. %s", diag)
@@ -281,10 +348,31 @@ If the current turn is the last allowed turn, return a short closing message ins
             system_instruction=system_prompt,
             temperature=1.0,
             response_mime_type="application/json",
-            response_schema=response_schema,
-            max_output_tokens=200,
+            response_json_schema=response_schema.model_json_schema(),
+            max_output_tokens=512,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
+
+    @staticmethod
+    def _parse_response_text(response_schema: type[BaseModel], text: str):
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.removeprefix("```json").removeprefix("```").strip()
+            cleaned = cleaned.removesuffix("```").strip()
+
+        parse_attempts = [cleaned]
+
+        for candidate in parse_attempts:
+            try:
+                return response_schema.model_validate_json(candidate)
+            except Exception:
+                try:
+                    return response_schema.model_validate(json.loads(candidate))
+                except Exception:
+                    continue
+
+        logger.warning("Gemini returned text that could not be parsed as %s.", response_schema.__name__)
+        return None
 
     @staticmethod
     def _build_contents(
@@ -311,12 +399,93 @@ If the current turn is the last allowed turn, return a short closing message ins
                 separators=(",", ":"),
                 sort_keys=True,
             )
-            final_text = f"[CONTEXT]\n{context_block}\n\n[USER_PROMPT]\n{user_prompt.strip()}"
+            final_text = f"<CONTEXT>\n{context_block}\n</CONTEXT>\n<USER_PROMPT>\n{user_prompt.strip()}\n</USER_PROMPT>"
         else:
             final_text = user_prompt.strip()
 
         contents.append(types.Content(role="user", parts=[types.Part(text=final_text)]))
         return contents
+
+    async def _request_with_retry(
+        self,
+        client,
+        response_schema: type[BaseModel],
+        system_prompt: str,
+        user_prompt: str,
+        chat_history: list[ChatMessage],
+        context_data: dict[str, Any] | None,
+    ):
+        attempt = 0
+        while True:
+            try:
+                return await client.aio.models.generate_content(
+                    model=self.model_name,
+                    contents=self._build_contents(
+                        user_prompt=user_prompt,
+                        chat_history=chat_history,
+                        context_data=context_data,
+                    ),
+                    config=self._build_config(system_prompt, response_schema),
+                )
+            except Exception as exc:
+                if not self._is_resource_exhausted_error(exc) or attempt >= self.MAX_429_RETRIES:
+                    raise
+
+                delay_seconds = min(8.0, (2**attempt) + random.uniform(0.0, 0.5))
+                logger.warning(
+                    "Gemini 429 RESOURCE_EXHAUSTED. Retrying in %.2fs (attempt %s/%s).",
+                    delay_seconds,
+                    attempt + 1,
+                    self.MAX_429_RETRIES,
+                )
+                await asyncio.sleep(delay_seconds)
+                attempt += 1
+
+    @staticmethod
+    def _is_resource_exhausted_error(exc: Exception) -> bool:
+        status_code = getattr(exc, "status_code", None)
+        if status_code == 429:
+            return True
+
+        message = str(exc)
+        return "429" in message and "RESOURCE_EXHAUSTED" in message
+
+    def _build_request_cache_key(
+        self,
+        response_schema: type[BaseModel],
+        system_prompt: str,
+        user_prompt: str,
+        chat_history: list[ChatMessage],
+        context_data: dict[str, Any] | None,
+    ) -> str:
+        payload = {
+            "model": self.model_name,
+            "response_schema": response_schema.__name__,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "chat_history": [message.model_dump() for message in chat_history],
+            "context_data": context_data,
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    def _get_cached_response(
+        self,
+        cache_key: str,
+        response_schema: type[BaseModel],
+    ):
+        cached = self._response_cache.get(cache_key)
+        if cached is None:
+            return None
+
+        cached_at, cached_result = cached
+        if time.monotonic() - cached_at > self.REQUEST_CACHE_TTL_SECONDS:
+            self._response_cache.pop(cache_key, None)
+            return None
+
+        return response_schema.model_validate(cached_result.model_dump())
+
+    def _store_cached_response(self, cache_key: str, result: BaseModel) -> None:
+        self._response_cache[cache_key] = (time.monotonic(), result)
 
     @staticmethod
     def _build_debug_payload(
@@ -336,8 +505,8 @@ If the current turn is the last allowed turn, return a short closing message ins
             "generation_config": {
                 "temperature": 1.0,
                 "response_mime_type": "application/json",
-                "response_schema": response_schema.__name__,
-                "max_output_tokens": 200,
+                "response_json_schema": response_schema.model_json_schema(),
+                "max_output_tokens": 512,
                 "thinking_budget": 0,
             },
         }
