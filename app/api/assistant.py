@@ -106,6 +106,16 @@ class OnboardingChatResponse(BaseModel):
     max_turns: int
 
 
+class LifestyleHabitResponse(BaseModel):
+    sitting_hours_per_day: str | None
+    exercise_days_per_week: str | None
+    pain_areas: str | None
+    updated_at: datetime | None
+
+    class Config:
+        from_attributes = True
+
+
 @router.post("/webcam-comment", response_model=WebcamCommentResponse)
 async def generate_webcam_comment(
     request: WebcamCommentRequest,
@@ -283,3 +293,15 @@ async def onboarding_chat(
         turn_count=turn_count,
         max_turns=ONBOARDING_MAX_TURNS,
     )
+
+
+@router.get("/lifestyle", response_model=LifestyleHabitResponse)
+async def get_lifestyle_habit(
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+):
+    """생활 습관 정보 조회"""
+    habit = db.query(UserLifestyleHabit).filter(UserLifestyleHabit.member_id == member.member_id).first()
+    if not habit:
+        raise HTTPException(status_code=404, detail="생활 습관 정보가 없습니다")
+    return habit
