@@ -21,4 +21,10 @@ ONBOARDING_FIELDS = [
         "description": "통증이 없으면 없음으로 기록",
         "question": "불편하거나 아픈 부위가 있나요?",
     },
+    {
+        "key": "sleep_position",
+        "label": "수면 시 자세",
+        "description": "",
+        "question": "잘 땐 주로 어떤 자세로 누워있나요?"
+    }
 ]
