@@ -3,7 +3,7 @@ from typing import Literal
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -89,6 +89,7 @@ class AnalysisRecordResponse(BaseModel):
     side_view: Literal["left", "right"]
     status: Literal["good", "warning", "bad"]
     confidence: float
+    issues: list[str]
     ai_message: str | None
     analyzed_at: str
     created_at: str
@@ -236,6 +237,22 @@ async def get_analysis_by_path_post(
     return _analysis_record_to_response(record)
 
 
+@router.delete("/analyses/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_analysis_by_path(
+    analysis_id: int,
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+) -> Response:
+    record = _get_member_analysis(db, member.member_id, analysis_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Analysis not found.")
+
+    db.delete(record)
+    db.commit()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/analyses", response_model=SaveAnalysisResponse | AnalysisRecordResponse | AnalysisHistoryResponse)
 async def save_analysis(
     request: SaveAnalysisRequest | None = Body(default=None),
@@ -276,6 +293,10 @@ async def save_analysis(
 
     front = analysis.get("front") or {}
     side = analysis.get("side") or {}
+    issues = analysis.get("issues") or []
+    if not isinstance(issues, list):
+        raise HTTPException(status_code=400, detail="Invalid issues payload.")
+
     analyzed_at = _parse_iso_datetime(analysis.get("analyzed_at"))
     ai_message = request.ai_message.strip() if request.ai_message else None
 
@@ -292,6 +313,7 @@ async def save_analysis(
         spine_alignment=front.get("spine_alignment"),
         asymmetry_score=front.get("asymmetry_score"),
         forward_head_detected=side["forward_head_detected"],
+        issues=[str(issue) for issue in issues],
         ai_message=ai_message,
         analyzed_at=analyzed_at,
     )
@@ -361,6 +383,7 @@ def _analysis_record_to_response(record: PoseAnalysis) -> AnalysisRecordResponse
         side_view=record.side_view,
         status=record.overall_status,
         confidence=record.overall_confidence,
+        issues=record.issues or [],
         ai_message=record.ai_message,
         analyzed_at=record.analyzed_at.isoformat(),
         created_at=record.created_at.isoformat(),
@@ -378,6 +401,7 @@ def _analysis_record_to_response(record: PoseAnalysis) -> AnalysisRecordResponse
             forward_head_detected=record.forward_head_detected,
         ),
     )
+
 
 
 def _build_analysis_response(
