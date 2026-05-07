@@ -91,6 +91,11 @@ class DevMemberResponse(BaseModel):
         from_attributes = True
 
 
+class NicknameResponse(BaseModel):
+    """랜덤 닉네임 응답"""
+    nickname: str
+
+
 def should_show_first_login(member: Member | None, created_in_request: bool = False) -> bool:
     if created_in_request:
         return True
@@ -461,3 +466,10 @@ async def delete_account(
     member.status = "WITHDRAWN"
     db.commit()
     return {"success": True, "message": "회원 탈퇴가 완료되었습니다"}
+
+
+@router.get("/me/random-nickname", response_model=NicknameResponse)
+async def get_random_nickname(db: Session = Depends(get_db)):
+    """회원 수정 시 랜덤 닉네임 생성"""
+    nickname = generate_nickname_with_fallback(db)
+    return NicknameResponse(nickname=nickname)
