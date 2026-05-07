@@ -72,6 +72,7 @@ class AnalyzePhotosResponse(BaseModel):
 
 class SaveAnalysisRequest(BaseModel):
     save_token: str | None = None
+    ai_message: str | None = None
     analysis_id: int | None = None
     request_id: int | None = Field(default=None, alias="id")
 
@@ -88,6 +89,7 @@ class AnalysisRecordResponse(BaseModel):
     side_view: Literal["left", "right"]
     status: Literal["good", "warning", "bad"]
     confidence: float
+    ai_message: str | None
     analyzed_at: str
     created_at: str
     images_stored: bool
@@ -275,6 +277,7 @@ async def save_analysis(
     front = analysis.get("front") or {}
     side = analysis.get("side") or {}
     analyzed_at = _parse_iso_datetime(analysis.get("analyzed_at"))
+    ai_message = request.ai_message.strip() if request.ai_message else None
 
     record = PoseAnalysis(
         member_id=member.member_id,
@@ -289,6 +292,7 @@ async def save_analysis(
         spine_alignment=front.get("spine_alignment"),
         asymmetry_score=front.get("asymmetry_score"),
         forward_head_detected=side["forward_head_detected"],
+        ai_message=ai_message,
         analyzed_at=analyzed_at,
     )
 
@@ -357,6 +361,7 @@ def _analysis_record_to_response(record: PoseAnalysis) -> AnalysisRecordResponse
         side_view=record.side_view,
         status=record.overall_status,
         confidence=record.overall_confidence,
+        ai_message=record.ai_message,
         analyzed_at=record.analyzed_at.isoformat(),
         created_at=record.created_at.isoformat(),
         images_stored=False,
