@@ -83,6 +83,7 @@ class PoseAnalysis(Base):
     front_confidence: Mapped[float] = mapped_column(Float, nullable=False)
     side_confidence: Mapped[float] = mapped_column(Float, nullable=False)
     neck_forward_angle: Mapped[float] = mapped_column(Float, nullable=False)
+    craniovertebral_angle: Mapped[float | None] = mapped_column(Float, nullable=True)
     shoulder_slope: Mapped[float] = mapped_column(Float, nullable=False)
     hip_slope: Mapped[float | None] = mapped_column(Float, nullable=True)
     spine_alignment: Mapped[float | None] = mapped_column(Float, nullable=True)
