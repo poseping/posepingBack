@@ -88,6 +88,7 @@ class PoseAnalysis(Base):
     spine_alignment: Mapped[float | None] = mapped_column(Float, nullable=True)
     asymmetry_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     forward_head_detected: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    issues: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     ai_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     analyzed_at: Mapped[datetime] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
