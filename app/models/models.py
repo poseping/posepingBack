@@ -91,6 +91,10 @@ class PoseAnalysis(Base):
     forward_head_detected: Mapped[bool] = mapped_column(Boolean, nullable=False)
     issues: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     ai_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    posture_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    score_grade: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    score_breakdown: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    score_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     analyzed_at: Mapped[datetime] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
 

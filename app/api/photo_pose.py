@@ -71,6 +71,10 @@ class AnalyzePhotosResponse(BaseModel):
     front_landmarks: list[LandmarkResponse]
     side_landmarks: list[LandmarkResponse]
     issues: list[str]
+    posture_score: int | None
+    score_grade: str | None
+    score_breakdown: dict[str, float]
+    score_version: int
     save_token: str | None
 
 
@@ -100,6 +104,10 @@ class AnalysisRecordResponse(BaseModel):
     images_stored: bool
     front: FrontMetricsResponse
     side: SideMetricsResponse
+    posture_score: float | None
+    score_grade: str | None
+    score_breakdown: dict | None
+    score_version: int | None
 
 
 class AnalysisHistoryResponse(BaseModel):
@@ -332,6 +340,10 @@ async def save_analysis(
         forward_head_detected=side["forward_head_detected"],
         issues=[str(issue) for issue in issues],
         ai_message=ai_message,
+        posture_score=analysis.get("posture_score"),
+        score_grade=analysis.get("score_grade"),
+        score_breakdown=analysis.get("score_breakdown"),
+        score_version=analysis.get("score_version"),
         analyzed_at=analyzed_at,
     )
 
@@ -418,6 +430,10 @@ def _analysis_record_to_response(record: PoseAnalysis) -> AnalysisRecordResponse
             craniovertebral_angle=record.craniovertebral_angle,
             forward_head_detected=record.forward_head_detected,
         ),
+        posture_score=record.posture_score,
+        score_grade=record.score_grade,
+        score_breakdown=record.score_breakdown,
+        score_version=record.score_version,
     )
 
 
@@ -436,7 +452,7 @@ def _build_analysis_response(
             {
                 "member_id": member_id,
                 "analysis": analysis_payload,
-                "version": 3,
+                "version": 4,
             }
         )
 
