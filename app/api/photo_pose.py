@@ -18,6 +18,9 @@ from app.services.photo_posture_analyzer import PhotoPostureAnalyzer, SideView
 
 router = APIRouter()
 
+C7_LANDMARK_ID = 33
+C7_LANDMARK_NAME = "c7"
+
 
 class PhotoGuideResponse(BaseModel):
     minimum_photo_count: int
@@ -39,6 +42,7 @@ class FrontMetricsResponse(BaseModel):
 class SideMetricsResponse(BaseModel):
     confidence: float
     neck_forward_angle: float | None
+    craniovertebral_angle: float | None = None
     forward_head_detected: bool | None
 
 
@@ -67,6 +71,10 @@ class AnalyzePhotosResponse(BaseModel):
     front_landmarks: list[LandmarkResponse]
     side_landmarks: list[LandmarkResponse]
     issues: list[str]
+    posture_score: int | None
+    score_grade: str | None
+    score_breakdown: dict[str, float]
+    score_version: int
     save_token: str | None
 
 
@@ -96,6 +104,10 @@ class AnalysisRecordResponse(BaseModel):
     images_stored: bool
     front: FrontMetricsResponse
     side: SideMetricsResponse
+    posture_score: float | None
+    score_grade: str | None
+    score_breakdown: dict | None
+    score_version: int | None
 
 
 class AnalysisHistoryResponse(BaseModel):
@@ -105,7 +117,7 @@ class AnalysisHistoryResponse(BaseModel):
 
 
 class ManualLandmarkInput(BaseModel):
-    id: int = Field(..., ge=0, le=32)
+    id: int = Field(..., ge=0, le=C7_LANDMARK_ID)
     x: float
     y: float
     z: float = 0.0
@@ -117,6 +129,10 @@ class ManualLandmarkAnalyzeRequest(BaseModel):
     side_view: SideView
     front_landmarks: list[ManualLandmarkInput]
     side_landmarks: list[ManualLandmarkInput]
+    front_frame_width: int = Field(default=0, ge=0)
+    front_frame_height: int = Field(default=0, ge=0)
+    side_frame_width: int = Field(default=0, ge=0)
+    side_frame_height: int = Field(default=0, ge=0)
 
 
 detector: MediaPipePoseDetector | None = None
@@ -184,8 +200,16 @@ async def analyze_manual_landmarks(
 ) -> AnalyzePhotosResponse:
     init_services()
 
-    front_result = _manual_landmarks_to_result(request.front_landmarks)
-    side_result = _manual_landmarks_to_result(request.side_landmarks)
+    front_result = _manual_landmarks_to_result(
+        request.front_landmarks,
+        request.front_frame_width,
+        request.front_frame_height,
+    )
+    side_result = _manual_landmarks_to_result(
+        request.side_landmarks,
+        request.side_frame_width,
+        request.side_frame_height,
+    )
     analysis = photo_analyzer.analyze(front_result, side_result, request.side_view)
 
     return _build_analysis_response(member.member_id, analysis, front_result, side_result)
@@ -308,6 +332,7 @@ async def save_analysis(
         front_confidence=front["confidence"],
         side_confidence=side["confidence"],
         neck_forward_angle=side["neck_forward_angle"],
+        craniovertebral_angle=side.get("craniovertebral_angle"),
         shoulder_slope=front["shoulder_slope"],
         hip_slope=front.get("hip_slope"),
         spine_alignment=front.get("spine_alignment"),
@@ -315,6 +340,10 @@ async def save_analysis(
         forward_head_detected=side["forward_head_detected"],
         issues=[str(issue) for issue in issues],
         ai_message=ai_message,
+        posture_score=analysis.get("posture_score"),
+        score_grade=analysis.get("score_grade"),
+        score_breakdown=analysis.get("score_breakdown"),
+        score_version=analysis.get("score_version"),
         analyzed_at=analyzed_at,
     )
 
@@ -398,8 +427,13 @@ def _analysis_record_to_response(record: PoseAnalysis) -> AnalysisRecordResponse
         side=SideMetricsResponse(
             confidence=record.side_confidence,
             neck_forward_angle=record.neck_forward_angle,
+            craniovertebral_angle=record.craniovertebral_angle,
             forward_head_detected=record.forward_head_detected,
         ),
+        posture_score=record.posture_score,
+        score_grade=record.score_grade,
+        score_breakdown=record.score_breakdown,
+        score_version=record.score_version,
     )
 
 
@@ -418,17 +452,49 @@ def _build_analysis_response(
             {
                 "member_id": member_id,
                 "analysis": analysis_payload,
-                "version": 3,
+                "version": 4,
             }
         )
+
+    side_landmarks = _landmarks_with_c7(side_result.landmarks, analysis.side_view)
 
     return AnalyzePhotosResponse(
         **analysis_payload,
         images_stored=False,
         front_landmarks=_landmarks_to_response(front_result.landmarks),
-        side_landmarks=_landmarks_to_response(side_result.landmarks),
+        side_landmarks=_landmarks_to_response(side_landmarks),
         save_token=save_token,
     )
+
+
+def _landmarks_with_c7(landmarks: list[Landmark], side_view: str) -> list[Landmark]:
+    if any(landmark.id == C7_LANDMARK_ID for landmark in landmarks):
+        return landmarks
+
+    ear_index = 7 if side_view == "left" else 8
+    shoulder_index = 11 if side_view == "left" else 12
+    ear = _landmark_at(landmarks, ear_index)
+    shoulder = _landmark_at(landmarks, shoulder_index)
+
+    if ear is None or shoulder is None:
+        return landmarks
+
+    c7 = Landmark(
+        id=C7_LANDMARK_ID,
+        name=C7_LANDMARK_NAME,
+        x=shoulder.x + ((ear.x - shoulder.x) * 0.15),
+        y=shoulder.y + ((ear.y - shoulder.y) * 0.25),
+        z=0.0,
+        visibility=min(ear.visibility, shoulder.visibility),
+    )
+    return [*landmarks, c7]
+
+
+def _landmark_at(landmarks: list[Landmark], landmark_id: int) -> Landmark | None:
+    if len(landmarks) <= landmark_id:
+        return None
+    landmark = landmarks[landmark_id]
+    return landmark if landmark.visibility > 0 else None
 
 
 def _landmarks_to_response(landmarks: list[Landmark]) -> list[LandmarkResponse]:
@@ -445,13 +511,17 @@ def _landmarks_to_response(landmarks: list[Landmark]) -> list[LandmarkResponse]:
     ]
 
 
-def _manual_landmarks_to_result(landmarks: list[ManualLandmarkInput]) -> PoseDetectionResult:
+def _manual_landmarks_to_result(
+    landmarks: list[ManualLandmarkInput],
+    frame_width: int = 0,
+    frame_height: int = 0,
+) -> PoseDetectionResult:
     if not landmarks:
         return PoseDetectionResult(
             landmarks=[],
             confidence=0.0,
-            frame_width=0,
-            frame_height=0,
+            frame_width=frame_width,
+            frame_height=frame_height,
             timestamp=datetime.utcnow().isoformat() + "Z",
             is_detected=False,
         )
@@ -486,8 +556,8 @@ def _manual_landmarks_to_result(landmarks: list[ManualLandmarkInput]) -> PoseDet
     return PoseDetectionResult(
         landmarks=normalized_landmarks,
         confidence=confidence,
-        frame_width=0,
-        frame_height=0,
+        frame_width=frame_width,
+        frame_height=frame_height,
         timestamp=datetime.utcnow().isoformat() + "Z",
         is_detected=True,
     )

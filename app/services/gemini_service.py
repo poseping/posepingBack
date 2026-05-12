@@ -89,11 +89,12 @@ Do not include medical or overly technical terms.
 'front.confidence' is the confidence score for the front-view analysis.
 'front.shoulder_slope' indicates shoulder tilt severity.
 'front.hip_slope' indicates hip tilt severity.
-'front.spine_alignment' indicates how well the spine is aligned.
+'front.spine_alignment' is an app-specific shoulder-to-hip alignment score from 0 to 1; higher is better.
 'front.asymmetry_score' indicates left-right imbalance severity.
 'side' contains side-view posture metrics.
 'side.confidence' is the confidence score for the side-view analysis.
-'side.neck_forward_angle' indicates forward-head or forward-neck tendency.
+'side.craniovertebral_angle' is an estimated CVA value; lower values suggest stronger forward-head tendency.
+'side.neck_forward_angle' is the older neck angle metric and should be secondary when craniovertebral_angle exists.
 'side.forward_head_detected' tells whether forward-head posture was detected.
 'issues' lists the main posture problems already detected.
 'alerts' lists special warnings or extra cautions.

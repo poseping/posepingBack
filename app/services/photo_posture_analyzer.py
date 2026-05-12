@@ -39,7 +39,16 @@ class FrontViewMetrics:
 class SideViewMetrics:
     confidence: float
     neck_forward_angle: float | None
+    craniovertebral_angle: float | None
     forward_head_detected: bool | None
+
+
+@dataclass
+class PostureScore:
+    score: int
+    grade: str
+    breakdown: dict[str, float]
+    version: int
 
 
 @dataclass
@@ -56,6 +65,10 @@ class PhotoPostureAnalysis:
     missing_landmarks: list[str]
     available_actions: list[str]
     can_save: bool
+    posture_score: int | None
+    score_grade: str | None
+    score_breakdown: dict[str, float]
+    score_version: int
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -65,11 +78,14 @@ class PhotoPostureAnalysis:
 
 
 class PhotoPostureAnalyzer:
+    SCORE_VERSION = 1
+    C7_LANDMARK_ID = 33
     MIN_VIEW_CONFIDENCE = 0.25
     HIP_SLOPE_THRESHOLD = 7.0
     ASYMMETRY_THRESHOLD = 5.0
     SPINE_ALIGNMENT_THRESHOLD = 0.75
-    FORWARD_HEAD_THRESHOLD = 15.0
+    FORWARD_HEAD_CVA_THRESHOLD = 50.0
+    FORWARD_HEAD_CVA_BORDERLINE = 53.0
     MIN_LANDMARK_VISIBILITY = 0.2
 
     HIP_ALERT_MESSAGE = "사진에 골반이 제대로 보이지 않으면 목과 어깨까지의 정보만 분석된다"
@@ -97,6 +113,7 @@ class PhotoPostureAnalyzer:
         side_metrics = SideViewMetrics(
             confidence=round(side_result.confidence, 3),
             neck_forward_angle=None,
+            craniovertebral_angle=None,
             forward_head_detected=None,
         )
 
@@ -115,13 +132,22 @@ class PhotoPostureAnalyzer:
                 missing_landmarks=required_missing,
                 available_actions=["manual_adjust", "reupload"],
                 can_save=False,
+                posture_score=None,
+                score_grade=None,
+                score_breakdown={},
+                score_version=self.SCORE_VERSION,
             )
 
         front_metrics.shoulder_slope = self.pose_analyzer.calculate_shoulder_slope(front_result.landmarks)
-        side_metrics.neck_forward_angle = self._calculate_side_neck_angle(side_result.landmarks, side_view)
+        side_metrics.neck_forward_angle = self._calculate_side_neck_angle(side_result.landmarks, side_view, side_result)
+        side_metrics.craniovertebral_angle = self._calculate_estimated_cva(
+            side_result.landmarks,
+            side_view,
+            side_result,
+        )
         side_metrics.forward_head_detected = (
-            side_metrics.neck_forward_angle > self.FORWARD_HEAD_THRESHOLD
-            if side_metrics.neck_forward_angle is not None
+            side_metrics.craniovertebral_angle < self.FORWARD_HEAD_CVA_THRESHOLD
+            if side_metrics.craniovertebral_angle is not None
             else None
         )
 
@@ -134,7 +160,12 @@ class PhotoPostureAnalyzer:
         analysis_mode = AnalysisMode.FULL
 
         if side_metrics.forward_head_detected:
-            issues.append(f"거북목 경향 ({side_metrics.neck_forward_angle:.1f}°)")
+            issues.append(f"거북목 경향 (CVA {side_metrics.craniovertebral_angle:.1f}°)")
+        elif (
+            side_metrics.craniovertebral_angle is not None
+            and side_metrics.craniovertebral_angle < self.FORWARD_HEAD_CVA_BORDERLINE
+        ):
+            issues.append(f"거북목 경계 (CVA {side_metrics.craniovertebral_angle:.1f}°)")
 
         if (
             front_metrics.shoulder_slope is not None
@@ -160,7 +191,7 @@ class PhotoPostureAnalyzer:
                 front_metrics.spine_alignment is not None
                 and front_metrics.spine_alignment < self.SPINE_ALIGNMENT_THRESHOLD
             ):
-                issues.append(f"척추 정렬 주의 (정렬도 {front_metrics.spine_alignment:.2f})")
+                issues.append(f"어깨-골반 정렬 주의 (내부 정렬 지표 {front_metrics.spine_alignment:.2f})")
         else:
             analysis_mode = AnalysisMode.UPPER_BODY_ONLY
             alerts.append(self.HIP_ALERT_MESSAGE)
@@ -171,6 +202,7 @@ class PhotoPostureAnalyzer:
             status = AnalysisStatus.WARNING
         else:
             status = AnalysisStatus.BAD
+        score = self._calculate_posture_score(front_metrics, side_metrics)
 
         return PhotoPostureAnalysis(
             status=status,
@@ -185,7 +217,88 @@ class PhotoPostureAnalyzer:
             missing_landmarks=[],
             available_actions=["save", "reupload"],
             can_save=True,
+            posture_score=score.score,
+            score_grade=score.grade,
+            score_breakdown=score.breakdown,
+            score_version=score.version,
         )
+
+    def _calculate_posture_score(
+        self,
+        front_metrics: FrontViewMetrics,
+        side_metrics: SideViewMetrics,
+    ) -> PostureScore:
+        components: dict[str, tuple[float, float]] = {}
+
+        if side_metrics.craniovertebral_angle is not None:
+            components["cva"] = (
+                30.0,
+                self._higher_is_better_score(side_metrics.craniovertebral_angle, minimum=40.0, target=53.0),
+            )
+
+        if front_metrics.shoulder_slope is not None:
+            components["shoulder_slope"] = (
+                20.0,
+                self._lower_is_better_score(front_metrics.shoulder_slope, target=10.0, maximum=25.0),
+            )
+
+        if front_metrics.hip_slope is not None:
+            components["hip_slope"] = (
+                15.0,
+                self._lower_is_better_score(front_metrics.hip_slope, target=7.0, maximum=20.0),
+            )
+
+        if front_metrics.spine_alignment is not None:
+            components["spine_alignment"] = (
+                20.0,
+                self._higher_is_better_score(front_metrics.spine_alignment, minimum=0.5, target=0.75),
+            )
+
+        if front_metrics.asymmetry_score is not None:
+            components["asymmetry"] = (
+                15.0,
+                self._lower_is_better_score(front_metrics.asymmetry_score, target=5.0, maximum=20.0),
+            )
+
+        if not components:
+            return PostureScore(score=0, grade="unknown", breakdown={}, version=self.SCORE_VERSION)
+
+        total_weight = sum(weight for weight, _factor in components.values())
+        breakdown = {
+            key: round((weight * factor / total_weight) * 100, 1)
+            for key, (weight, factor) in components.items()
+        }
+        score_value = int(round(sum(breakdown.values())))
+
+        if score_value >= 85:
+            grade = "stable"
+        elif score_value >= 70:
+            grade = "caution"
+        else:
+            grade = "needs_improvement"
+
+        return PostureScore(
+            score=max(0, min(100, score_value)),
+            grade=grade,
+            breakdown=breakdown,
+            version=self.SCORE_VERSION,
+        )
+
+    @staticmethod
+    def _lower_is_better_score(value: float, target: float, maximum: float) -> float:
+        if value <= target:
+            return 1.0
+        if value >= maximum:
+            return 0.0
+        return 1.0 - ((value - target) / (maximum - target))
+
+    @staticmethod
+    def _higher_is_better_score(value: float, minimum: float, target: float) -> float:
+        if value >= target:
+            return 1.0
+        if value <= minimum:
+            return 0.0
+        return (value - minimum) / (target - minimum)
 
     def _find_required_missing_landmarks(
         self,
@@ -233,7 +346,12 @@ class PhotoPostureAnalyzer:
         hip_ratio = self._vertical_ratio(left_hip, right_hip)
         return round(((shoulder_ratio + hip_ratio) / 2) * 100, 2)
 
-    def _calculate_side_neck_angle(self, landmarks: list[Landmark], side_view: SideView) -> float:
+    def _calculate_side_neck_angle(
+        self,
+        landmarks: list[Landmark],
+        side_view: SideView,
+        result: PoseDetectionResult,
+    ) -> float:
         if side_view == SideView.LEFT:
             ear_index = self.pose_analyzer.LEFT_EAR
             shoulder_index = self.pose_analyzer.LEFT_SHOULDER
@@ -244,9 +362,37 @@ class PhotoPostureAnalyzer:
         ear = self._landmark(landmarks, ear_index)
         shoulder = self._landmark(landmarks, shoulder_index)
 
-        dx = abs(ear.x - shoulder.x)
-        dy = abs(ear.y - shoulder.y) + 1e-6
+        dx, dy = self._scaled_axis_delta(ear, shoulder, result)
+        dy += 1e-6
         return round(float(np.degrees(np.arctan2(dx, dy))), 2)
+
+    def _calculate_estimated_cva(
+        self,
+        landmarks: list[Landmark],
+        side_view: SideView,
+        result: PoseDetectionResult,
+    ) -> float:
+        if side_view == SideView.LEFT:
+            ear_index = self.pose_analyzer.LEFT_EAR
+            shoulder_index = self.pose_analyzer.LEFT_SHOULDER
+        else:
+            ear_index = self.pose_analyzer.RIGHT_EAR
+            shoulder_index = self.pose_analyzer.RIGHT_SHOULDER
+
+        ear = self._landmark(landmarks, ear_index)
+        c7 = self._landmark(landmarks, self.C7_LANDMARK_ID)
+        if c7.visibility < self.MIN_LANDMARK_VISIBILITY:
+            c7 = self._landmark(landmarks, shoulder_index)
+
+        dx, dy = self._scaled_axis_delta(ear, c7, result)
+        dx += 1e-6
+        return round(float(np.degrees(np.arctan2(dy, dx))), 2)
+
+    @staticmethod
+    def _scaled_axis_delta(start: Landmark, end: Landmark, result: PoseDetectionResult) -> tuple[float, float]:
+        width = result.frame_width if result.frame_width > 0 else 1
+        height = result.frame_height if result.frame_height > 0 else 1
+        return abs(start.x - end.x) * width, abs(start.y - end.y) * height
 
     def _has_visible(self, landmarks: list[Landmark], index: int) -> bool:
         if len(landmarks) <= index:
