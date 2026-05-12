@@ -44,6 +44,14 @@ class SideViewMetrics:
 
 
 @dataclass
+class PostureScore:
+    score: int
+    grade: str
+    breakdown: dict[str, float]
+    version: int
+
+
+@dataclass
 class PhotoPostureAnalysis:
     status: AnalysisStatus
     analysis_mode: AnalysisMode
@@ -57,6 +65,10 @@ class PhotoPostureAnalysis:
     missing_landmarks: list[str]
     available_actions: list[str]
     can_save: bool
+    posture_score: int | None
+    score_grade: str | None
+    score_breakdown: dict[str, float]
+    score_version: int
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -66,6 +78,7 @@ class PhotoPostureAnalysis:
 
 
 class PhotoPostureAnalyzer:
+    SCORE_VERSION = 1
     C7_LANDMARK_ID = 33
     MIN_VIEW_CONFIDENCE = 0.25
     HIP_SLOPE_THRESHOLD = 7.0
@@ -119,6 +132,10 @@ class PhotoPostureAnalyzer:
                 missing_landmarks=required_missing,
                 available_actions=["manual_adjust", "reupload"],
                 can_save=False,
+                posture_score=None,
+                score_grade=None,
+                score_breakdown={},
+                score_version=self.SCORE_VERSION,
             )
 
         front_metrics.shoulder_slope = self.pose_analyzer.calculate_shoulder_slope(front_result.landmarks)
@@ -185,6 +202,7 @@ class PhotoPostureAnalyzer:
             status = AnalysisStatus.WARNING
         else:
             status = AnalysisStatus.BAD
+        score = self._calculate_posture_score(front_metrics, side_metrics)
 
         return PhotoPostureAnalysis(
             status=status,
@@ -199,7 +217,88 @@ class PhotoPostureAnalyzer:
             missing_landmarks=[],
             available_actions=["save", "reupload"],
             can_save=True,
+            posture_score=score.score,
+            score_grade=score.grade,
+            score_breakdown=score.breakdown,
+            score_version=score.version,
         )
+
+    def _calculate_posture_score(
+        self,
+        front_metrics: FrontViewMetrics,
+        side_metrics: SideViewMetrics,
+    ) -> PostureScore:
+        components: dict[str, tuple[float, float]] = {}
+
+        if side_metrics.craniovertebral_angle is not None:
+            components["cva"] = (
+                30.0,
+                self._higher_is_better_score(side_metrics.craniovertebral_angle, minimum=40.0, target=53.0),
+            )
+
+        if front_metrics.shoulder_slope is not None:
+            components["shoulder_slope"] = (
+                20.0,
+                self._lower_is_better_score(front_metrics.shoulder_slope, target=10.0, maximum=25.0),
+            )
+
+        if front_metrics.hip_slope is not None:
+            components["hip_slope"] = (
+                15.0,
+                self._lower_is_better_score(front_metrics.hip_slope, target=7.0, maximum=20.0),
+            )
+
+        if front_metrics.spine_alignment is not None:
+            components["spine_alignment"] = (
+                20.0,
+                self._higher_is_better_score(front_metrics.spine_alignment, minimum=0.5, target=0.75),
+            )
+
+        if front_metrics.asymmetry_score is not None:
+            components["asymmetry"] = (
+                15.0,
+                self._lower_is_better_score(front_metrics.asymmetry_score, target=5.0, maximum=20.0),
+            )
+
+        if not components:
+            return PostureScore(score=0, grade="unknown", breakdown={}, version=self.SCORE_VERSION)
+
+        total_weight = sum(weight for weight, _factor in components.values())
+        breakdown = {
+            key: round((weight * factor / total_weight) * 100, 1)
+            for key, (weight, factor) in components.items()
+        }
+        score_value = int(round(sum(breakdown.values())))
+
+        if score_value >= 85:
+            grade = "stable"
+        elif score_value >= 70:
+            grade = "caution"
+        else:
+            grade = "needs_improvement"
+
+        return PostureScore(
+            score=max(0, min(100, score_value)),
+            grade=grade,
+            breakdown=breakdown,
+            version=self.SCORE_VERSION,
+        )
+
+    @staticmethod
+    def _lower_is_better_score(value: float, target: float, maximum: float) -> float:
+        if value <= target:
+            return 1.0
+        if value >= maximum:
+            return 0.0
+        return 1.0 - ((value - target) / (maximum - target))
+
+    @staticmethod
+    def _higher_is_better_score(value: float, minimum: float, target: float) -> float:
+        if value >= target:
+            return 1.0
+        if value <= minimum:
+            return 0.0
+        return (value - minimum) / (target - minimum)
 
     def _find_required_missing_landmarks(
         self,
