@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -26,6 +27,10 @@ def _get_runtime_database_url() -> str:
     return settings.database_url.strip()
 
 
+def _uses_postgresql(database_url: str) -> bool:
+    return database_url.startswith("postgresql://") or database_url.startswith("postgresql+")
+
+
 def get_engine() -> Engine:
     global engine
 
@@ -35,10 +40,14 @@ def get_engine() -> Engine:
             raise RuntimeError("DATABASE_URL is not configured.")
 
         is_pooler_url = "pooler." in runtime_database_url
-        engine_options = {
+        engine_options: dict[str, Any] = {
             "pool_pre_ping": True,
             "pool_recycle": 1800,
         }
+        if _uses_postgresql(runtime_database_url):
+            engine_options["connect_args"] = {
+                "options": "-c timezone=Asia/Seoul",
+            }
         if is_pooler_url:
             engine_options["poolclass"] = NullPool
 
