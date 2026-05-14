@@ -124,9 +124,9 @@ class WebcamSession(Base):
     )
     started_at: Mapped[datetime] = mapped_column(nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    good_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    warning_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    bad_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    good_frames: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    warning_frames: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    bad_frames: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     cause_counts: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 

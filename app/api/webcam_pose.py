@@ -63,9 +63,9 @@ class PostureProfileUpdateRequest(BaseModel):
 class WebcamSessionRequest(BaseModel):
     started_at: datetime
     ended_at: datetime
-    good_count: int = 0
-    warning_count: int = 0
-    bad_count: int = 0
+    good_frames: int = 0
+    warning_frames: int = 0
+    bad_frames: int = 0
     cause_counts: Optional[dict] = None
 
 
@@ -73,10 +73,10 @@ class WebcamSessionHistoryItem(BaseModel):
     session_id: int
     started_at: datetime
     ended_at: Optional[datetime]
-    good_count: int
-    warning_count: int
-    bad_count: int
-    total_count: int
+    good_frames: int
+    warning_frames: int
+    bad_frames: int
+    total_frames: int
     good_ratio: float
     cause_counts: Optional[dict]
 
@@ -145,14 +145,31 @@ async def create_webcam_session(
         member_id=member.member_id,
         started_at=request.started_at,
         ended_at=request.ended_at,
-        good_count=request.good_count,
-        warning_count=request.warning_count,
-        bad_count=request.bad_count,
+        good_frames=request.good_frames,
+        warning_frames=request.warning_frames,
+        bad_frames=request.bad_frames,
         cause_counts=request.cause_counts,
     )
     db.add(session)
     db.commit()
     return {"session_id": session.session_id}
+
+
+@router.delete("/session/{session_id}", status_code=204)
+async def delete_webcam_session(
+    session_id: int,
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+):
+    """웹캠 세션 삭제 (본인 세션만 가능)"""
+    session = db.query(WebcamSession).filter(
+        WebcamSession.session_id == session_id,
+        WebcamSession.member_id == member.member_id,
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+    db.delete(session)
+    db.commit()
 
 
 @router.get("/history", response_model=WebcamHistoryResponse)
@@ -188,17 +205,17 @@ async def get_webcam_history(
 
     sessions = []
     for row in rows:
-        total_count = row.good_count + row.warning_count + row.bad_count
-        good_ratio = row.good_count / total_count if total_count > 0 else 0.0
+        total_frames = row.good_frames + row.warning_frames + row.bad_frames
+        good_ratio = (row.good_frames * 1.0 + row.warning_frames * 0.5) / total_frames if total_frames > 0 else 0.0
         sessions.append(
             WebcamSessionHistoryItem(
                 session_id=row.session_id,
                 started_at=row.started_at,
                 ended_at=row.ended_at,
-                good_count=row.good_count,
-                warning_count=row.warning_count,
-                bad_count=row.bad_count,
-                total_count=total_count,
+                good_frames=row.good_frames,
+                warning_frames=row.warning_frames,
+                bad_frames=row.bad_frames,
+                total_frames=total_frames,
                 good_ratio=round(good_ratio, 4),
                 cause_counts=row.cause_counts,
             )
