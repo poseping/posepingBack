@@ -1,3 +1,4 @@
+import math
 from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any
@@ -268,7 +269,7 @@ class PhotoPostureAnalyzer:
             key: round((weight * factor / total_weight) * 100, 1)
             for key, (weight, factor) in components.items()
         }
-        score_value = int(round(sum(breakdown.values())))
+        score_value = math.floor(sum(breakdown.values()))
 
         if score_value >= 85:
             grade = "stable"
