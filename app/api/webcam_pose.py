@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import verify_auth
 from app.db.session import get_db
-from app.models.models import Member, UserPostureProfile, WebcamAlertType, WebcamSession
+from app.models.models import Member, UserPostureProfile, UserWebcamSettings, WebcamAlertType, WebcamSession
 from app.services.webcam_ai_context import build_ai_context
 from app.services.mediapipe_detector import MediaPipePoseDetector
 from app.services.webcam_comparator import compare as compare_posture
@@ -101,6 +101,17 @@ class AlertTypeResponse(BaseModel):
 class WebcamAnalyzeRequest(BaseModel):
     image_base64: str
     profile_id: Optional[int] = None  # None이면 활성화된 기준 자세 중 첫 번째 사용
+    sensitivity: str = "medium"       # 'low' | 'medium' | 'high'
+
+
+class WebcamSettingsResponse(BaseModel):
+    posture_sensitivity: str
+    ai_comment_threshold_sec: int
+
+
+class WebcamSettingsUpdateRequest(BaseModel):
+    posture_sensitivity: Optional[str] = None
+    ai_comment_threshold_sec: Optional[int] = None
 
 
 class PointDeviation(BaseModel):
@@ -380,15 +391,19 @@ async def analyze_webcam(
 
     # 모든 활성 프로필과 비교 → deviation_score가 가장 낮은 프로필 선택
     # (듀얼모니터 등 여러 기준 자세 중 현재 자세와 가장 가까운 것을 자동 매칭)
+    sensitivity = request.sensitivity if request.sensitivity in ("low", "medium", "high") else "medium"
+
     best_profile = profiles[0]
     best_result = compare_posture(
         pose_result.landmarks,
         profiles[0].reference_landmarks.get("landmarks", []),
+        sensitivity=sensitivity,
     )
     for p in profiles[1:]:
         candidate = compare_posture(
             pose_result.landmarks,
             p.reference_landmarks.get("landmarks", []),
+            sensitivity=sensitivity,
         )
         if candidate.deviation_score < best_result.deviation_score:
             best_profile = p
@@ -423,4 +438,56 @@ async def analyze_webcam(
         landmarks=landmarks_out,
         frame_width=frame.shape[1],
         frame_height=frame.shape[0],
+    )
+
+
+# ==================== 웹캠 설정 ====================
+
+_VALID_SENSITIVITIES = {"low", "medium", "high"}
+_VALID_THRESHOLDS = {30, 60, 180, 300}
+
+
+@router.get("/settings", response_model=WebcamSettingsResponse)
+def get_webcam_settings(
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+):
+    row = db.query(UserWebcamSettings).filter(UserWebcamSettings.member_id == member.member_id).first()
+    if row is None:
+        return WebcamSettingsResponse(posture_sensitivity="medium", ai_comment_threshold_sec=60)
+    return WebcamSettingsResponse(
+        posture_sensitivity=row.posture_sensitivity,
+        ai_comment_threshold_sec=row.ai_comment_threshold_sec,
+    )
+
+
+@router.patch("/settings", response_model=WebcamSettingsResponse)
+def update_webcam_settings(
+    request: WebcamSettingsUpdateRequest,
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+):
+    if request.posture_sensitivity is not None and request.posture_sensitivity not in _VALID_SENSITIVITIES:
+        raise HTTPException(status_code=422, detail="posture_sensitivity는 low, medium, high 중 하나여야 합니다")
+    if request.ai_comment_threshold_sec is not None and request.ai_comment_threshold_sec not in _VALID_THRESHOLDS:
+        raise HTTPException(status_code=422, detail="ai_comment_threshold_sec는 30, 60, 180, 300 중 하나여야 합니다")
+
+    row = db.query(UserWebcamSettings).filter(UserWebcamSettings.member_id == member.member_id).first()
+    if row is None:
+        row = UserWebcamSettings(member_id=member.member_id)
+        db.add(row)
+
+    if request.posture_sensitivity is not None:
+        row.posture_sensitivity = request.posture_sensitivity
+    if request.ai_comment_threshold_sec is not None:
+        row.ai_comment_threshold_sec = request.ai_comment_threshold_sec
+
+    from datetime import timezone as _tz
+    row.updated_at = datetime.now(_tz.utc)
+    db.commit()
+    db.refresh(row)
+
+    return WebcamSettingsResponse(
+        posture_sensitivity=row.posture_sensitivity,
+        ai_comment_threshold_sec=row.ai_comment_threshold_sec,
     )

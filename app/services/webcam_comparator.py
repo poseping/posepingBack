@@ -18,9 +18,12 @@ _POINT_TO_ALERT: dict[int, str] = {
     12: "SHOULDER_SLOPE",
 }
 
-GOOD_THRESHOLD  = 0.10   # status warning 하한: 가중평균 score >= 이 값이면 warning (어깨너비 단위)
-BAD_THRESHOLD   = 0.25   # status bad 기준: 가중평균 score >= 이 값이면 bad (어깨너비 단위)
-ISSUE_THRESHOLD = 0.15   # per-point 이슈 트리거: 개별 랜드마크 거리 >= 이 값일 때 issues에 추가 (어깨너비 단위)
+_SENSITIVITY_THRESHOLDS: dict[str, dict[str, float]] = {
+    "low":    {"good": 0.15, "bad": 0.35, "issue": 0.20},
+    "medium": {"good": 0.10, "bad": 0.25, "issue": 0.15},
+    "high":   {"good": 0.07, "bad": 0.18, "issue": 0.10},
+}
+_DEFAULT_SENSITIVITY = "medium"
 
 # 얼굴/어깨 비율이 기준 대비 이 값 이상이면 거북목 주의 (NECK_FORWARD 발생)
 _FACE_PROXIMITY_WARNING = 1.15
@@ -148,8 +151,9 @@ class ComparisonResult:
     per_point: dict[str, float]
 
 
-def compare(current_landmarks: list, reference_landmarks: list[dict]) -> ComparisonResult:
+def compare(current_landmarks: list, reference_landmarks: list[dict], sensitivity: str = _DEFAULT_SENSITIVITY) -> ComparisonResult:
     ref_map = {lm["id"]: lm for lm in reference_landmarks}
+    t = _SENSITIVITY_THRESHOLDS.get(sensitivity, _SENSITIVITY_THRESHOLDS[_DEFAULT_SENSITIVITY])
 
     # 어깨 기준 좌표계 구성 (카메라 거리·위치 변화 제거)
     cur_frame = _shoulder_frame(current_landmarks)
@@ -180,7 +184,7 @@ def compare(current_landmarks: list, reference_landmarks: list[dict]) -> Compari
         weighted_sum += dist * weight
         weight_total += weight
 
-        if dist >= ISSUE_THRESHOLD:
+        if dist >= t["issue"]:
             alert_id = _POINT_TO_ALERT.get(idx)
             if alert_id:
                 triggered.add(alert_id)
@@ -209,10 +213,10 @@ def compare(current_landmarks: list, reference_landmarks: list[dict]) -> Compari
             triggered.add("NECK_FORWARD")
 
     # status 결정: deviation_score + 심각 issue 반영
-    if score >= BAD_THRESHOLD or neck_proximity_bad:
+    if score >= t["bad"] or neck_proximity_bad:
         status = "bad"
         triggered.add("BAD_POSTURE")
-    elif score >= GOOD_THRESHOLD:
+    elif score >= t["good"]:
         status = "warning"
     else:
         status = "good"

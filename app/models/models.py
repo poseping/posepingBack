@@ -149,6 +149,26 @@ class UserPostureProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
 
 
+class UserWebcamSettings(Base):
+    __tablename__ = "user_webcam_settings"
+
+    __table_args__ = (
+        UniqueConstraint("member_id", name="uq_user_webcam_settings_member_id"),
+    )
+
+    setting_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    member_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("members.member_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    posture_sensitivity: Mapped[str] = mapped_column(String(10), nullable=False, server_default="medium")
+    ai_comment_threshold_sec: Mapped[int] = mapped_column(Integer, nullable=False, server_default="60")
+    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
+
 class UserLifestyleHabit(Base):
     __tablename__ = "user_lifestyle_habits"
 

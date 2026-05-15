@@ -2,7 +2,7 @@ import hashlib
 import json
 from typing import Any
 
-from app.services.webcam_comparator import BAD_THRESHOLD, GOOD_THRESHOLD, ComparisonResult
+from app.services.webcam_comparator import ComparisonResult
 
 
 def build_ai_context(result: ComparisonResult) -> dict[str, Any]:
@@ -28,9 +28,9 @@ def build_ai_context(result: ComparisonResult) -> dict[str, Any]:
     primary_issue = ordered_issues[0] if ordered_issues else None
     primary_issue_label = issue_labels.get(primary_issue, "general posture deviation") if primary_issue else None
 
-    if result.deviation_score >= BAD_THRESHOLD:
+    if result.status == "bad":
         severity = "high"
-    elif result.deviation_score >= GOOD_THRESHOLD:
+    elif result.status == "warning":
         severity = "medium"
     else:
         severity = "low"
