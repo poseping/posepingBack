@@ -7,8 +7,6 @@ _KEY_POINTS: dict[int, tuple[str, float]] = {
     8:  ("오른쪽 귀", 0.15),
     11: ("왼쪽 어깨", 0.15),
     12: ("오른쪽 어깨", 0.15),
-    23: ("왼쪽 골반", 0.075),
-    24: ("오른쪽 골반", 0.075),
 }
 
 # 랜드마크 인덱스 → webcam_alert_type.alert_type_id 매핑
@@ -18,22 +16,52 @@ _POINT_TO_ALERT: dict[int, str] = {
     8:  "HEAD_TILT",
     11: "SHOULDER_SLOPE",
     12: "SHOULDER_SLOPE",
-    23: "HIP_DEVIATION",
-    24: "HIP_DEVIATION",
 }
 
-GOOD_THRESHOLD = 0.05
-BAD_THRESHOLD = 0.10
+_SENSITIVITY_THRESHOLDS: dict[str, dict[str, float]] = {
+    "low":    {"good": 0.15, "bad": 0.35, "issue": 0.20},
+    "medium": {"good": 0.10, "bad": 0.25, "issue": 0.15},
+    "high":   {"good": 0.07, "bad": 0.18, "issue": 0.10},
+}
+_DEFAULT_SENSITIVITY = "medium"
 
 # 얼굴/어깨 비율이 기준 대비 이 값 이상이면 거북목 주의 (NECK_FORWARD 발생)
 _FACE_PROXIMITY_WARNING = 1.15
 # 이 값 이상이면 심한 거북목으로 status "bad" 강제
 _FACE_PROXIMITY_BAD = 1.25
 
-# 귀 가시성이 이 값 미만이면 귀 간격 지표 생략
-# 0.5는 정면 응시 시에도 귀가 탈락되는 경우가 많아 0.2로 완화
-# (완전히 화면 밖이거나 90도 옆을 보는 경우는 0.1 이하라 여전히 걸러짐)
+# 귀/눈 근접비율 계산 시 최소 visibility (0.2로 완화 — 정면에서도 귀가 잘 탈락)
 _VISIBILITY_MIN = 0.2
+# 메인 비교 루프에서 신뢰도가 낮은 랜드마크를 skip할 최소 visibility
+_KEY_POINT_VIS_MIN = 0.3
+
+
+def _shoulder_frame(landmarks: list) -> tuple[float, float, float] | None:
+    """현재 랜드마크 리스트에서 어깨 기준 좌표계 (mid_x, mid_y, width) 추출"""
+    if len(landmarks) <= 12:
+        return None
+    ls, rs = landmarks[11], landmarks[12]
+    width = math.sqrt((ls.x - rs.x) ** 2 + (ls.y - rs.y) ** 2)
+    if width < 1e-6:
+        return None
+    return (ls.x + rs.x) / 2, (ls.y + rs.y) / 2, width
+
+
+def _shoulder_frame_ref(ref_map: dict) -> tuple[float, float, float] | None:
+    """기준 랜드마크 딕셔너리에서 어깨 기준 좌표계 (mid_x, mid_y, width) 추출"""
+    if 11 not in ref_map or 12 not in ref_map:
+        return None
+    ls, rs = ref_map[11], ref_map[12]
+    width = math.sqrt((ls["x"] - rs["x"]) ** 2 + (ls["y"] - rs["y"]) ** 2)
+    if width < 1e-6:
+        return None
+    return (ls["x"] + rs["x"]) / 2, (ls["y"] + rs["y"]) / 2, width
+
+
+def _rel(x: float, y: float, frame: tuple[float, float, float]) -> tuple[float, float]:
+    """절대 좌표 → 어깨 기준 상대 좌표 변환"""
+    mid_x, mid_y, width = frame
+    return (x - mid_x) / width, (y - mid_y) / width
 
 
 def _get_face_proximity_ratio(current_landmarks: list, ref_map: dict) -> float | None:
@@ -123,8 +151,15 @@ class ComparisonResult:
     per_point: dict[str, float]
 
 
-def compare(current_landmarks: list, reference_landmarks: list[dict]) -> ComparisonResult:
+def compare(current_landmarks: list, reference_landmarks: list[dict], sensitivity: str = _DEFAULT_SENSITIVITY) -> ComparisonResult:
     ref_map = {lm["id"]: lm for lm in reference_landmarks}
+    t = _SENSITIVITY_THRESHOLDS.get(sensitivity, _SENSITIVITY_THRESHOLDS[_DEFAULT_SENSITIVITY])
+
+    # 어깨 기준 좌표계 구성 (카메라 거리·위치 변화 제거)
+    cur_frame = _shoulder_frame(current_landmarks)
+    ref_frame = _shoulder_frame_ref(ref_map)
+    if cur_frame is None or ref_frame is None:
+        return ComparisonResult(status="warning", deviation_score=0.0, issues=[], per_point={})
 
     weighted_sum = 0.0
     weight_total = 0.0
@@ -136,14 +171,20 @@ def compare(current_landmarks: list, reference_landmarks: list[dict]) -> Compari
             continue
 
         cur = current_landmarks[idx]
+        if getattr(cur, "visibility", 1.0) < _KEY_POINT_VIS_MIN:
+            continue
+
         ref = ref_map[idx]
 
-        dist = math.sqrt((cur.x - ref["x"]) ** 2 + (cur.y - ref["y"]) ** 2)
+        cur_rx, cur_ry = _rel(cur.x, cur.y, cur_frame)
+        ref_rx, ref_ry = _rel(ref["x"], ref["y"], ref_frame)
+
+        dist = math.sqrt((cur_rx - ref_rx) ** 2 + (cur_ry - ref_ry) ** 2)
         per_point[label] = round(dist, 4)
         weighted_sum += dist * weight
         weight_total += weight
 
-        if dist > GOOD_THRESHOLD:
+        if dist >= t["issue"]:
             alert_id = _POINT_TO_ALERT.get(idx)
             if alert_id:
                 triggered.add(alert_id)
@@ -172,10 +213,10 @@ def compare(current_landmarks: list, reference_landmarks: list[dict]) -> Compari
             triggered.add("NECK_FORWARD")
 
     # status 결정: deviation_score + 심각 issue 반영
-    if score >= BAD_THRESHOLD or neck_proximity_bad:
+    if score >= t["bad"] or neck_proximity_bad:
         status = "bad"
         triggered.add("BAD_POSTURE")
-    elif score >= GOOD_THRESHOLD or triggered:
+    elif score >= t["good"]:
         status = "warning"
     else:
         status = "good"
