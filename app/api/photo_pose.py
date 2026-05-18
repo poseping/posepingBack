@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import verify_auth
@@ -235,6 +236,17 @@ async def get_analysis(
     return _analysis_record_to_response(record)
 
 
+@router.get("/analyses/latest", response_model=AnalysisRecordResponse)
+async def get_latest_analysis(
+    member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
+) -> AnalysisRecordResponse:
+    record = _get_latest_member_analysis(db, member.member_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Analysis not found.")
+
+    return _analysis_record_to_response(record)
+
 @router.get("/analyses/{analysis_id}", response_model=AnalysisRecordResponse)
 async def get_analysis_by_path(
     analysis_id: int,
@@ -365,14 +377,14 @@ def _get_member_analyses(
     limit: int,
     offset: int,
 ) -> list[PoseAnalysis]:
-    return (
-        db.query(PoseAnalysis)
-        .filter(PoseAnalysis.member_id == member_id)
+    statement = (
+        select(PoseAnalysis)
+        .where(PoseAnalysis.member_id == member_id)
         .order_by(PoseAnalysis.analyzed_at.desc(), PoseAnalysis.analysis_id.desc())
         .offset(offset)
         .limit(limit)
-        .all()
     )
+    return list(db.scalars(statement).all())
 
 
 def _analysis_history_to_response(
@@ -396,14 +408,26 @@ def _get_member_analysis(
     member_id: int,
     analysis_id: int,
 ) -> PoseAnalysis | None:
-    return (
-        db.query(PoseAnalysis)
-        .filter(
+    statement = (
+        select(PoseAnalysis)
+        .where(
             PoseAnalysis.analysis_id == analysis_id,
             PoseAnalysis.member_id == member_id,
         )
-        .first()
     )
+    return db.scalars(statement).first()
+
+
+def _get_latest_member_analysis(
+    db: Session,
+    member_id: int,
+) -> PoseAnalysis | None:
+    statement = (
+        select(PoseAnalysis)
+        .where(PoseAnalysis.member_id == member_id)
+        .order_by(PoseAnalysis.analyzed_at.desc(), PoseAnalysis.analysis_id.desc())
+    )
+    return db.scalars(statement).first()
 
 
 def _analysis_record_to_response(record: PoseAnalysis) -> AnalysisRecordResponse:
