@@ -33,6 +33,7 @@ class OnboardingExtractedField(BaseModel):
 class OnboardingChatResult(BaseModel):
     reply: str | None = None
     extracted_fields: list[OnboardingExtractedField] = Field(default_factory=list)
+    user_requested_stop: bool = False
 
 
 class GeminiAssistantService:
@@ -56,6 +57,13 @@ Korean only.
 One or two sentences maximum.
 One issue, one action only.
 No greetings, no filler openers like "안녕하세요" or "지금".
+
+# Context Rules
+The context may include 'lifestyle_habit' with sitting_hours_per_day, exercise_days_per_week,
+pain_areas, and sleep_position.
+Use lifestyle_habit only to choose the most relevant wording or action.
+Do not list the lifestyle data back to the user.
+If lifestyle_habit is missing or empty, ignore it.
 """
 
     WEBCAM_USER_PROMPT = (
@@ -100,6 +108,7 @@ Do not include medical or overly technical terms.
 'alerts' lists special warnings or extra cautions.
 'missing_landmarks' lists missing body landmarks if analysis was incomplete.
 'side_view' tells which side image was used.
+'lifestyle_habit' may contain the user's sitting hours, exercise days, pain areas, and sleep position.
 
 # Reasoning Rules
 Treat the 'issues' array as high-priority evidence.
@@ -108,6 +117,8 @@ If 'alerts' is empty, do not invent extra warning messages.
 If 'missing_landmarks' is empty, assume the analysis was completed normally.
 If 'status' is 'warning', explain the posture as needing attention but not in an alarming way.
 If 'forward_head_detected' is true, consider forward-head tendency an important issue.
+Use lifestyle_habit only as supporting context for personalized wording or one practical action.
+Do not overfit to lifestyle_habit, do not repeat the raw lifestyle data, and ignore it if empty.
 """
 
     PHOTO_USER_PROMPT = """
@@ -126,10 +137,14 @@ Extract any required field values you can identify.
 Return both:
 1. the next user-facing reply
 2. any extracted fields from the user's message
-Always include both keys in the JSON response.
+3. whether the user explicitly wants to stop the onboarding conversation
+Always include reply, extracted_fields, and user_requested_stop in the JSON response.
 If no field was extracted, return an empty array for extracted_fields.
 If a next question is needed, reply must contain that question.
 If the conversation should stop, reply must contain a short closing message.
+If the user says they want to stop, quit, end, skip, continue later, or not answer more questions,
+set user_requested_stop to true.
+When user_requested_stop is true, do not ask another question.
 
 # Extraction Rules
 Return extracted fields only when the user has provided a usable answer.

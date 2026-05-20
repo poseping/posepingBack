@@ -186,5 +186,6 @@ class UserLifestyleHabit(Base):
     sitting_hours_per_day: Mapped[str | None] = mapped_column(String(100), nullable=True)
     exercise_days_per_week: Mapped[str | None] = mapped_column(String(100), nullable=True)
     pain_areas: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sleep_position: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
