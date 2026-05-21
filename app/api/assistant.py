@@ -332,5 +332,11 @@ async def get_lifestyle_habit(
 
     habit = db.query(UserLifestyleHabit).filter(UserLifestyleHabit.member_id == member.member_id).first()
     if not habit:
-        raise HTTPException(status_code=404, detail="생활 습관 정보가 없습니다")
+        return LifestyleHabitResponse(
+            sitting_hours_per_day=None,
+            exercise_days_per_week=None,
+            pain_areas=None,
+            sleep_position=None,
+            updated_at=None,
+        )
     return habit
