@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -110,18 +110,63 @@ class LifestyleHabitResponse(BaseModel):
     sitting_hours_per_day: str | None
     exercise_days_per_week: str | None
     pain_areas: str | None
+    sleep_position: str | None
     updated_at: datetime | None
 
     class Config:
         from_attributes = True
 
 
+def save_lifestyle_habit(
+    db: Session,
+    member_id: int,
+    collected_fields: dict[str, str],
+) -> None:
+    try:
+        lifestyle_habit = (
+            db.query(UserLifestyleHabit)
+            .filter(UserLifestyleHabit.member_id == member_id)
+            .first()
+        )
+        if lifestyle_habit is None:
+            lifestyle_habit = UserLifestyleHabit(member_id=member_id)
+            db.add(lifestyle_habit)
+
+        lifestyle_habit.sitting_hours_per_day = collected_fields.get("sitting_hours_per_day")
+        lifestyle_habit.exercise_days_per_week = collected_fields.get("exercise_days_per_week")
+        lifestyle_habit.pain_areas = collected_fields.get("pain_areas")
+        lifestyle_habit.sleep_position = collected_fields.get("sleep_position")
+        lifestyle_habit.updated_at = datetime.utcnow()
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Failed to save onboarding data.") from exc
+
+
+def get_lifestyle_context(db: Session, member_id: int) -> dict[str, str] | None:
+    lifestyle_habit = (
+        db.query(UserLifestyleHabit)
+        .filter(UserLifestyleHabit.member_id == member_id)
+        .first()
+    )
+    if lifestyle_habit is None:
+        return None
+
+    context = {
+        "sitting_hours_per_day": lifestyle_habit.sitting_hours_per_day,
+        "exercise_days_per_week": lifestyle_habit.exercise_days_per_week,
+        "pain_areas": lifestyle_habit.pain_areas,
+        "sleep_position": lifestyle_habit.sleep_position,
+    }
+    return {key: value for key, value in context.items() if value}
+
+
 @router.post("/webcam-comment", response_model=WebcamCommentResponse)
 async def generate_webcam_comment(
     request: WebcamCommentRequest,
     member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
 ) -> WebcamCommentResponse:
-    _ = member
     service = get_assistant_service()
     current_signature = request.judgement_signature or request.ai_context.get("judgement_signature")
     judgement_changed = current_signature != request.previous_judgement_signature
@@ -142,6 +187,7 @@ async def generate_webcam_comment(
                 "issues": request.issues,
                 "profile_name": request.profile_name,
                 "ai_context": request.ai_context,
+                "lifestyle_habit": get_lifestyle_context(db, member.member_id),
             },
         )
     except RuntimeError as exc:
@@ -159,8 +205,8 @@ async def generate_webcam_comment(
 async def generate_photo_comment(
     request: PhotoCommentRequest,
     member: Member = Depends(verify_auth),
+    db: Session = Depends(get_db),
 ) -> PhotoCommentResponse:
-    _ = member
     service = get_assistant_service()
 
     try:
@@ -175,6 +221,7 @@ async def generate_photo_comment(
                 "missing_landmarks": request.missing_landmarks,
                 "front": request.front,
                 "side": request.side,
+                "lifestyle_habit": get_lifestyle_context(db, member.member_id),
             },
         )
     except RuntimeError as exc:
@@ -190,21 +237,9 @@ async def onboarding_chat(
     member: Member = Depends(verify_auth),
     db: Session = Depends(get_db),
 ) -> OnboardingChatResponse:
-    service = get_assistant_service()
     collected_fields = normalize_collected_fields(request.collected_fields)
     turn_count = count_user_turns(request.chat_history, request.user_prompt)
     missing_fields = get_missing_fields(collected_fields)
-
-    if len(missing_fields) == 0:
-        return OnboardingChatResponse(
-            reply="생활 습관 분석이 완료되었어요!",
-            done=True,
-            stop_reason="completed",
-            collected_fields=collected_fields,
-            missing_fields=[],
-            turn_count=turn_count,
-            max_turns=ONBOARDING_MAX_TURNS,
-        )
 
     if turn_count > ONBOARDING_MAX_TURNS:
         return OnboardingChatResponse(
@@ -216,6 +251,8 @@ async def onboarding_chat(
             turn_count=turn_count,
             max_turns=ONBOARDING_MAX_TURNS,
         )
+
+    service = get_assistant_service()
 
     try:
         result: OnboardingChatResult = await await_with_client_disconnect(
@@ -238,9 +275,11 @@ async def onboarding_chat(
 
     merged_fields = merge_collected_fields(collected_fields, result.extracted_fields)
     remaining_fields = get_missing_fields(merged_fields)
-    done = len(remaining_fields) == 0 or turn_count >= ONBOARDING_MAX_TURNS
+    done = result.user_requested_stop or len(remaining_fields) == 0 or turn_count >= ONBOARDING_MAX_TURNS
 
-    if len(remaining_fields) == 0:
+    if result.user_requested_stop:
+        stop_reason = "user_cancelled"
+    elif len(remaining_fields) == 0:
         stop_reason = "completed"
     elif turn_count >= ONBOARDING_MAX_TURNS:
         stop_reason = "max_turn_reached"
@@ -249,28 +288,13 @@ async def onboarding_chat(
 
     if done:
         if stop_reason == "completed":
-            try:
-                lifestyle_habit = (
-                    db.query(UserLifestyleHabit)
-                    .filter(UserLifestyleHabit.member_id == member.member_id)
-                    .first()
-                )
-                if lifestyle_habit is None:
-                    lifestyle_habit = UserLifestyleHabit(member_id=member.member_id)
-                    db.add(lifestyle_habit)
-
-                lifestyle_habit.sitting_hours_per_day = merged_fields.get("sitting_hours_per_day")
-                lifestyle_habit.exercise_days_per_week = merged_fields.get("exercise_days_per_week")
-                lifestyle_habit.pain_areas = merged_fields.get("pain_areas")
-                lifestyle_habit.updated_at = datetime.utcnow()
-                db.commit()
-            except SQLAlchemyError as exc:
-                db.rollback()
-                raise HTTPException(status_code=503, detail="Failed to save onboarding data.") from exc
+            save_lifestyle_habit(db, member.member_id, merged_fields)
 
         closing_reply = "생활 습관 분석이 완료되었어요!"
         if stop_reason == "max_turn_reached":
             closing_reply = "여기까지 정보를 정리할게요."
+        elif stop_reason == "user_cancelled":
+            closing_reply = (result.reply or "").strip() or "여기까지 정보를 정리할게요."
 
         return OnboardingChatResponse(
             reply=closing_reply,
@@ -297,10 +321,15 @@ async def onboarding_chat(
 
 @router.get("/lifestyle", response_model=LifestyleHabitResponse)
 async def get_lifestyle_habit(
+    response: Response,
     member: Member = Depends(verify_auth),
     db: Session = Depends(get_db),
 ):
     """생활 습관 정보 조회"""
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+
     habit = db.query(UserLifestyleHabit).filter(UserLifestyleHabit.member_id == member.member_id).first()
     if not habit:
         raise HTTPException(status_code=404, detail="생활 습관 정보가 없습니다")
