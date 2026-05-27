@@ -482,8 +482,7 @@ def update_webcam_settings(
     if request.ai_comment_threshold_sec is not None:
         row.ai_comment_threshold_sec = request.ai_comment_threshold_sec
 
-    from datetime import timezone as _tz
-    row.updated_at = datetime.now(_tz.utc)
+    row.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(row)
 
