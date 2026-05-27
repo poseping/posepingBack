@@ -64,7 +64,7 @@ def _rel(x: float, y: float, frame: tuple[float, float, float]) -> tuple[float, 
     return (x - mid_x) / width, (y - mid_y) / width
 
 
-def _get_face_proximity_ratio(current_landmarks: list, ref_map: dict) -> float | None:
+def _get_face_proximity_ratio(current_landmarks: list, ref_map: dict) -> tuple[float, dict] | None:
     """
     얼굴 근접 비율(현재/기준) 반환. 두 지표 중 더 큰 값 사용.
 
