@@ -69,7 +69,7 @@ class MediaPipePoseDetector:
     def __init__(self, min_pose_detection_confidence: float = 0.5,
                  min_pose_presence_confidence: float = 0.5,
                  min_tracking_confidence: float = 0.5,
-                 running_mode: Literal["image", "video"] = "video"):
+                 running_mode: Literal["image", "video"] = "image"):
         """
         MediaPipePoseDetector 초기화 (Task API 사용)
 
