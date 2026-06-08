@@ -31,25 +31,11 @@ from app.services.onboarding_session import (
 
 router = APIRouter()
 
-assistant_service: GeminiAssistantService | None = None
-
-
-def get_assistant_service() -> GeminiAssistantService:
-    global assistant_service
-
-    if assistant_service is None:
-        assistant_service = GeminiAssistantService(
-            api_key=settings.vertex_ai_api_key,
-            model_name=settings.gemini_model,
-        )
-    return assistant_service
-
-
 def get_service_for_user(db, member_id: int) -> GeminiAssistantService:
     user_key = get_user_ai_key(db, member_id)
-    if user_key:
-        return GeminiAssistantService(api_key=user_key, model_name=settings.gemini_model)
-    return get_assistant_service()
+    if not user_key:
+        raise HTTPException(status_code=403, detail="AI 키가 등록되지 않았거나 AI 모드가 꺼져 있어요.")
+    return GeminiAssistantService(api_key=user_key, model_name=settings.gemini_model)
 
 
 async def await_with_client_disconnect(http_request: Request, task):
