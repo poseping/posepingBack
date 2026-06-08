@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import verify_auth
+from app.api.user_api_settings import get_user_ai_key
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.models import Member, UserLifestyleHabit
@@ -42,6 +43,13 @@ def get_assistant_service() -> GeminiAssistantService:
             model_name=settings.gemini_model,
         )
     return assistant_service
+
+
+def get_service_for_user(db, member_id: int) -> GeminiAssistantService:
+    user_key = get_user_ai_key(db, member_id)
+    if user_key:
+        return GeminiAssistantService(api_key=user_key, model_name=settings.gemini_model)
+    return get_assistant_service()
 
 
 async def await_with_client_disconnect(http_request: Request, task):
@@ -167,7 +175,7 @@ async def generate_webcam_comment(
     member: Member = Depends(verify_auth),
     db: Session = Depends(get_db),
 ) -> WebcamCommentResponse:
-    service = get_assistant_service()
+    service = get_service_for_user(db, member.member_id)
     current_signature = request.judgement_signature or request.ai_context.get("judgement_signature")
     judgement_changed = current_signature != request.previous_judgement_signature
 
@@ -207,7 +215,7 @@ async def generate_photo_comment(
     member: Member = Depends(verify_auth),
     db: Session = Depends(get_db),
 ) -> PhotoCommentResponse:
-    service = get_assistant_service()
+    service = get_service_for_user(db, member.member_id)
 
     try:
         result: PhotoCommentResult = await service.generate_photo_comment(
@@ -252,7 +260,7 @@ async def onboarding_chat(
             max_turns=ONBOARDING_MAX_TURNS,
         )
 
-    service = get_assistant_service()
+    service = get_service_for_user(db, member.member_id)
 
     try:
         result: OnboardingChatResult = await await_with_client_disconnect(
