@@ -165,7 +165,26 @@ class UserWebcamSettings(Base):
     )
     posture_sensitivity: Mapped[str] = mapped_column(String(10), nullable=False, server_default="medium")
     ai_comment_threshold_sec: Mapped[int] = mapped_column(Integer, nullable=False, server_default="60")
-    ai_comment_mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default="ai")
+    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
+
+class UserApiSettings(Base):
+    __tablename__ = "user_api_settings"
+
+    __table_args__ = (
+        UniqueConstraint("member_id", name="uq_user_api_settings_member_id"),
+    )
+
+    setting_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    member_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("members.member_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ai_api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_ai_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
 

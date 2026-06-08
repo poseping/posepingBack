@@ -107,13 +107,11 @@ class WebcamAnalyzeRequest(BaseModel):
 class WebcamSettingsResponse(BaseModel):
     posture_sensitivity: str
     ai_comment_threshold_sec: int
-    ai_comment_mode: str
 
 
 class WebcamSettingsUpdateRequest(BaseModel):
     posture_sensitivity: Optional[str] = None
     ai_comment_threshold_sec: Optional[int] = None
-    ai_comment_mode: Optional[str] = None
 
 
 class PointDeviation(BaseModel):
@@ -447,9 +445,6 @@ async def analyze_webcam(
 
 _VALID_SENSITIVITIES = {"low", "medium", "high"}
 _VALID_THRESHOLDS = {30, 60, 180, 300}
-_VALID_AI_COMMENT_MODES = {"ai", "notification"}
-
-
 @router.get("/settings", response_model=WebcamSettingsResponse)
 def get_webcam_settings(
     member: Member = Depends(verify_auth),
@@ -460,12 +455,10 @@ def get_webcam_settings(
         return WebcamSettingsResponse(
             posture_sensitivity="medium",
             ai_comment_threshold_sec=60,
-            ai_comment_mode="ai",
         )
     return WebcamSettingsResponse(
         posture_sensitivity=row.posture_sensitivity,
         ai_comment_threshold_sec=row.ai_comment_threshold_sec,
-        ai_comment_mode=row.ai_comment_mode,
     )
 
 
@@ -479,8 +472,6 @@ def update_webcam_settings(
         raise HTTPException(status_code=422, detail="posture_sensitivity는 low, medium, high 중 하나여야 합니다")
     if request.ai_comment_threshold_sec is not None and request.ai_comment_threshold_sec not in _VALID_THRESHOLDS:
         raise HTTPException(status_code=422, detail="ai_comment_threshold_sec는 30, 60, 180, 300 중 하나여야 합니다")
-    if request.ai_comment_mode is not None and request.ai_comment_mode not in _VALID_AI_COMMENT_MODES:
-        raise HTTPException(status_code=422, detail="ai_comment_mode는 ai, notification 중 하나여야 합니다")
 
     row = db.query(UserWebcamSettings).filter(UserWebcamSettings.member_id == member.member_id).first()
     if row is None:
@@ -491,8 +482,6 @@ def update_webcam_settings(
         row.posture_sensitivity = request.posture_sensitivity
     if request.ai_comment_threshold_sec is not None:
         row.ai_comment_threshold_sec = request.ai_comment_threshold_sec
-    if request.ai_comment_mode is not None:
-        row.ai_comment_mode = request.ai_comment_mode
 
     row.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -501,5 +490,4 @@ def update_webcam_settings(
     return WebcamSettingsResponse(
         posture_sensitivity=row.posture_sensitivity,
         ai_comment_threshold_sec=row.ai_comment_threshold_sec,
-        ai_comment_mode=row.ai_comment_mode,
     )
